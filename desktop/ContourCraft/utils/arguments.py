@@ -2,7 +2,7 @@ from copy import deepcopy
 import importlib
 import os
 import typing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -44,9 +44,9 @@ class MainConfig:
     config: Optional[str] = None           # name of the config file relative to $DEFAULTS.project_dir/configs (without .yaml)
 
     device: str = 'cuda:0'                 # device to use
-    dataloader: DataConfig = DataConfig()
-    experiment: ExperimentConfig = ExperimentConfig()
-    restart: RestartConfig = RestartConfig()
+    dataloader: DataConfig = field(default_factory=DataConfig)
+    experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
+    restart: RestartConfig = field(default_factory=RestartConfig)
     detect_anomaly: bool = False           # torch.autograd.detect_anomaly
     step_start: int = 0                    
 
