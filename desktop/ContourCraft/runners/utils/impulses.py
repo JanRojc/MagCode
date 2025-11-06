@@ -4,14 +4,18 @@ import time
 
 import numpy as np
 import torch
-import cccollisions
+# NNOCUDA fix
+# import cccollisions
 import torch_scatter
 from torch_geometric.data import Batch
 
 from utils.common import add_field_to_pyg_batch
 from utils.io import pickle_dump
 from utils.defaults import DEFAULTS
-from utils.selfcollisions import CollisionHelper, find_close_faces, get_continuous_collisions
+
+# NNOCUDA fix
+# from utils.selfcollisions import CollisionHelper, find_close_faces, get_continuous_collisions
+from utils.selfcollisions import CollisionHelper, find_close_faces
 
 class CollisionSolver:
     def __init__(self, mcfg):
@@ -203,51 +207,51 @@ class CollisionSolver:
         # print('\n')
 
         w = 1
-        impulsed_points = []
-        faces_to_check = None
-        for i in range(self.mcfg.n_impulse_iters):
-            # print(f"step {i}")
-            verts1_curr = verts1 + vertex_dx_sum
+        # impulsed_points = []
+        # faces_to_check = None
+        # for i in range(self.mcfg.n_impulse_iters):
+        #     # print(f"step {i}")
+        #     verts1_curr = verts1 + vertex_dx_sum
 
-            triangles1 = verts0[faces].unsqueeze(dim=0).contiguous()
-            triangles2 = verts1_curr[faces].unsqueeze(dim=0).contiguous()
+        #     triangles1 = verts0[faces].unsqueeze(dim=0).contiguous()
+        #     triangles2 = verts1_curr[faces].unsqueeze(dim=0).contiguous()
 
-            bboxes, tree = cccollisions.bvh_motion(triangles1, triangles2)
+        #     bboxes, tree = cccollisions.bvh_motion(triangles1, triangles2)
 
-            if faces_to_check is None:
-                imp_dv, imp_dx, imp_counter = cccollisions.compute_impulses(bboxes, tree, triangles1, triangles2,
-                                                                                triangles_mass,
-                                                                                32 * 3, 16)
-            else:
-                imp_dv, imp_dx, imp_counter = cccollisions.compute_impulses_partial(bboxes, tree, triangles1,
-                                                                                        triangles2,
-                                                                                        triangles_mass, faces_to_check,
-                                                                                        32 * 3, 16)
+        #     if faces_to_check is None:
+        #         imp_dv, imp_dx, imp_counter = cccollisions.compute_impulses(bboxes, tree, triangles1, triangles2,
+        #                                                                         triangles_mass,
+        #                                                                         32 * 3, 16)
+        #     else:
+        #         imp_dv, imp_dx, imp_counter = cccollisions.compute_impulses_partial(bboxes, tree, triangles1,
+        #                                                                                 triangles2,
+        #                                                                                 triangles_mass, faces_to_check,
+        #                                                                                 32 * 3, 16)
 
-            imp_counter = imp_counter.long()
-
-
-            if triangles_penetrating is not None:
-                imp_counter = imp_counter * torch.logical_not(triangles_penetrating[..., 0])
-                imp_dx = imp_dx * torch.logical_not(triangles_penetrating)
-                imp_dv = imp_dv * torch.logical_not(triangles_penetrating)
+        #     imp_counter = imp_counter.long()
 
 
-            if ncoll is None:
-                ncoll = imp_counter.sum().item() / 4
-
-            if self.mcfg.max_ncoll > 0 and ncoll > self.mcfg.max_ncoll:
-
-                break
-
-            if imp_counter.sum() == 0:
-                break
-
-            vertex_dx_sum, vertex_dv_sum, faces_to_check = update_verts(vertex_dx_sum, vertex_dv_sum, verts1, faces,
-                                                                        imp_counter, imp_dx, imp_dv, unpinned_mask, w=w)
+        #     if triangles_penetrating is not None:
+        #         imp_counter = imp_counter * torch.logical_not(triangles_penetrating[..., 0])
+        #         imp_dx = imp_dx * torch.logical_not(triangles_penetrating)
+        #         imp_dv = imp_dv * torch.logical_not(triangles_penetrating)
 
 
-            iter += 1
+        #     if ncoll is None:
+        #         ncoll = imp_counter.sum().item() / 4
+
+        #     if self.mcfg.max_ncoll > 0 and ncoll > self.mcfg.max_ncoll:
+
+        #         break
+
+        #     if imp_counter.sum() == 0:
+        #         break
+
+        #     vertex_dx_sum, vertex_dv_sum, faces_to_check = update_verts(vertex_dx_sum, vertex_dv_sum, verts1, faces,
+        #                                                                 imp_counter, imp_dx, imp_dv, unpinned_mask, w=w)
+
+
+        #     iter += 1
 
         if ncoll is None:
             ncoll = 0

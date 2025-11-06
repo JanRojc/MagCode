@@ -15,11 +15,14 @@ class BaseBlock(MessagePassing):
         node_processor_dict = {k: v() for k, v in node_processor_dict.items()}
         self.node_processor_dict = nn.ModuleDict(node_processor_dict)
 
-        self.inspector.inspect(self.message)
+        # fix
+        # self.inspector.inspect(self.message)
 
-        self.__user_args__ = self.inspector.keys(
-            ['message', 'aggregate', 'update']).difference(
-            self.special_args)
+        # self.__user_args__ = self.inspector.keys(
+        #     ['message', 'aggregate', 'update']).difference(
+        #     self.special_args)
+
+        self.__user_args__ = set(['target_features_i', 'source_features_j'])
 
     def forward(self, sample):
         sample = self.propagate(sample)
@@ -38,10 +41,22 @@ class BaseBlock(MessagePassing):
         return out_features
 
     def aggregate_nodes(self, edge_features, edge_index, size, **kwargs):
-        user_args = self.inspector.keys(['aggregate']).difference(self.special_args)
+        # user_args = self.inspector.keys(['aggregate']).difference(self.special_args)
+        # coll_dict = self._collect(user_args, edge_index,
+        #                              size, kwargs)
+        # aggr_kwargs = self.inspector.distribute('aggregate', coll_dict)
+        # node_features = self.aggregate(edge_features, **aggr_kwargs)
+        # return node_features
+
+        user_args = set()
         coll_dict = self._collect(user_args, edge_index,
                                      size, kwargs)
-        aggr_kwargs = self.inspector.distribute('aggregate', coll_dict)
+        aggr_kwargs = {
+            'index': coll_dict.get('index'),
+            'dim_size': coll_dict.get('dim_size')
+        }
+
+        aggr_kwargs = {k: v for k, v in aggr_kwargs.items() if v is not None}
         node_features = self.aggregate(edge_features, **aggr_kwargs)
         return node_features
 
@@ -65,8 +80,15 @@ class BaseBlock(MessagePassing):
                                                 target_features=target_features))
         coll_dict['edge_features'] = mesh_edges.features
         coll_dict['edge_processor_key'] = edge_processor_key
-        msg_kwargs = self.inspector.distribute('message', coll_dict)
-        out = self.message(**msg_kwargs)
+        # msg_kwargs = self.inspector.distribute('message', coll_dict)
+        # out = self.message(**msg_kwargs)
+        out = self.message(
+            edge_processor_key=coll_dict.get('edge_processor_key'),
+            target_features_i=coll_dict.get('target_features_i'),
+            source_features_j=coll_dict.get('source_features_j'),
+            edge_features=coll_dict.get('edge_features')
+        )
+
         return out
 
     def update(self, features_list, node_processor_key):

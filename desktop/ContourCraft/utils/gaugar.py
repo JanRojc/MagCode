@@ -194,7 +194,7 @@ class GauGarConverter:
         return relaxation_trajectory
     
     def _create_config(self, subject_out, multigarment=False):
-        template_config_path = Path(DEFAULTS.project_dir) / 'configs' / 'finetune' / 'base.yaml'
+        template_config_path = Path(DEFAULTS.config_dir) / 'finetune' / 'base.yaml'
         config = yaml.safe_load(template_config_path.read_text())
         config['dataloaders']['finetune']['dataset']['finetune']['train_split_path'] = \
              str(Path('datasplits') / 'finetuning' / subject_out / 'train.csv')
@@ -213,10 +213,10 @@ class GauGarConverter:
 
         config['checkpoints_dir'] = f"trained_models/finetuning/{subject_out}"
         
-        out_config_path = Path(DEFAULTS.project_dir) / 'configs' / 'finetune' / f'{subject_out}.yaml'
+        out_config_path = Path(DEFAULTS.config_dir) / 'finetune' / f'{subject_out}.yaml'
         out_config_path.parent.mkdir(parents=True, exist_ok=True)
         out_config_path.write_text(yaml.dump(config, default_flow_style=False))
-        relative_config_path = out_config_path.relative_to(Path(DEFAULTS.project_dir) / 'configs').with_suffix('')
+        relative_config_path = out_config_path.relative_to(Path(DEFAULTS.config_dir)).with_suffix('')
 
         print(f"Config saved to {out_config_path}")
         print('Now you can finetune the model with:')

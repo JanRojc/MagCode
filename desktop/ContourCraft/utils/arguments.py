@@ -126,7 +126,7 @@ def load_params(config_name: str=None, config_dir: str=None):
 
     # Set default config directory
     if config_dir is None:
-        config_dir = Path(DEFAULTS.project_dir) / 'configs'
+        config_dir = Path(DEFAULTS.config_dir)
 
     # Load default config from MainConfig and merge in cli parameters
     conf = OmegaConf.structured(MainConfig)

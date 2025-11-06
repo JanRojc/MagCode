@@ -27,6 +27,8 @@ from utils.cloth_and_material import FaceNormals, ClothMatAug
 from utils.common import move2device, save_checkpoint, add_field_to_pyg_batch, copy_pyg_batch, TorchTimer, NodeType
 from utils.defaults import DEFAULTS
 
+# NOCUDA fix
+import time
 
 @dataclass
 class MaterialConfig:
@@ -71,11 +73,14 @@ class SafecheckConfig:
     device: str = II('device')
 
 
+# fix
+from dataclasses import dataclass, field
+
 @dataclass
 class Config:
-    optimizer: OptimConfig = OptimConfig()
-    material: MaterialConfig = MaterialConfig()
-    safecheck: SafecheckConfig = SafecheckConfig()
+    optimizer: OptimConfig = field(default_factory=OptimConfig)
+    material: MaterialConfig = field(default_factory=MaterialConfig)
+    safecheck: SafecheckConfig = field(default_factory=SafecheckConfig)
     warmup_steps: int = 100
     increase_roll_every: int = 5000
     roll_max: int = 5
@@ -187,8 +192,17 @@ class Runner(nn.Module):
         prev_out_sample = None
         fail_reason = 'SUCCESS'
 
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
+        # NOCUDA fix
+        # start = torch.cuda.Event(enable_timing=True)
+        # end = torch.cuda.Event(enable_timing=True)
+        if torch.cuda.is_available():
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            use_cuda_timer = True
+        else:
+            start = (None, None) 
+            end = (None, None)
+            use_cuda_timer = False
 
         sample = self.prepare_sample(sample)
 
@@ -212,8 +226,17 @@ class Runner(nn.Module):
             if n_steps == 0:
                 break
 
-            with TorchTimer(metrics_dict, 'hood_time', start=start, end=end):
+            # NOCUDA fix
+            # with TorchTimer(metrics_dict, 'hood_time', start=start, end=end):
+            #     sample_step = self.model(sample_step)
+            if use_cuda_timer:
+                with TorchTimer(metrics_dict, 'hood_time', start=start, end=end):
+                    sample_step = self.model(sample_step)
+            else:
+                st_model = time.time()
                 sample_step = self.model(sample_step)
+                metrics_dict['hood_time'].append(time.time() - st_model)
+
             ncoll = self.safecheck_solver.calc_tritri_collisions2(sample_step, verts_key='pred_pos')
             metrics_dict['ncoll'].append(ncoll)
 

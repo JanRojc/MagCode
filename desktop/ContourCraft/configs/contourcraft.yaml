@@ -80,4 +80,4 @@ model:
     body_collision_radius: 3e-2
     n_coarse_levels: 4
 
-device: 'cuda:0'
+device: 'cpu'

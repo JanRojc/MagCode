@@ -3,7 +3,8 @@ import pickle
 import networkx as nx
 import numpy as np
 import torch
-import cccollisions as collisions
+# NOCUDA fix
+# import cccollisions as collisions
 # from mesh_intersection.bvh_search_tree import BVH
 from pytorch3d.ops import knn_points
 from torch_scatter import scatter_min
@@ -53,9 +54,15 @@ def find_close_faces(vertices, faces, threshold=0):
     """
     # threshold = 0
     triangles = vertices[faces].unsqueeze(dim=0).contiguous()
-    bboxes, tree = collisions.bvh(triangles)
-    face_pairs = collisions.find_collisions(bboxes, tree, triangles, threshold, 320)[0]
-    face_pairs = face_pairs[face_pairs[:, 0] >= 0, :]
+    
+    # NOCUDA fix
+    # bboxes, tree = collisions.bvh(triangles)
+    # face_pairs = collisions.find_collisions(bboxes, tree, triangles, threshold, 320)[0]
+    # face_pairs = face_pairs[face_pairs[:, 0] >= 0, :]
+
+    face_pairs = torch.empty((0, 2), dtype=torch.long, device='cpu')
+    if face_pairs.numel() > 0:
+        face_pairs = face_pairs[face_pairs[:, 0] >= 0, :]
 
     return face_pairs
 
@@ -110,52 +117,52 @@ def find_node_face_pairs(vertices, faces, f_normals, threshold_triangles=3e-2, t
     return points_from, faces_to, barycoords_masked, dists_normal_masked
 
 
-def find_node_face_pairs_cuda(vertices, faces, threshold=1e-3):
-    """
+# def find_node_face_pairs_cuda(vertices, faces, threshold=1e-3):
+#     """
 
-    :param vertices: Vx3
-    :param faces: Fx3
-    :param threshold:
-    :return: points_from (N), faces_to (N)
-    """
+#     :param vertices: Vx3
+#     :param faces: Fx3
+#     :param threshold:
+#     :return: points_from (N), faces_to (N)
+#     """
 
-    triangles1 = vertices[faces].contiguous()
-    bboxes, tree = collisions.bvh(triangles1.unsqueeze(0))
-    proximity_tensor = collisions.find_proximity(bboxes, tree, triangles1, threshold, 64)
+#     triangles1 = vertices[faces].contiguous()
+#     bboxes, tree = collisions.bvh(triangles1.unsqueeze(0))
+#     proximity_tensor = collisions.find_proximity(bboxes, tree, triangles1, threshold, 64)
 
-    proximity_tensor = proximity_tensor[0][0]
-    mask = proximity_tensor[:, 0] >= 0
-    proximity_tensor = proximity_tensor[mask, :]
+#     proximity_tensor = proximity_tensor[0][0]
+#     mask = proximity_tensor[:, 0] >= 0
+#     proximity_tensor = proximity_tensor[mask, :]
 
-    points_from = []
-    faces_to = []
+#     points_from = []
+#     faces_to = []
 
-    tri_node_mask = torch.logical_and(proximity_tensor[:, 2] >= 9, proximity_tensor[:, 2] < 12)
-    faces_to_curr = proximity_tensor[tri_node_mask, 0]
-    faces_from_curr = proximity_tensor[tri_node_mask, 1]
-    points_from_curr = faces[faces_from_curr]
-    v_ids_curr = proximity_tensor[tri_node_mask, 2] - 9
-    v_ids_curr = v_ids_curr.unsqueeze(-1)
-    points_from_curr = torch.gather(points_from_curr, 1, v_ids_curr)
+#     tri_node_mask = torch.logical_and(proximity_tensor[:, 2] >= 9, proximity_tensor[:, 2] < 12)
+#     faces_to_curr = proximity_tensor[tri_node_mask, 0]
+#     faces_from_curr = proximity_tensor[tri_node_mask, 1]
+#     points_from_curr = faces[faces_from_curr]
+#     v_ids_curr = proximity_tensor[tri_node_mask, 2] - 9
+#     v_ids_curr = v_ids_curr.unsqueeze(-1)
+#     points_from_curr = torch.gather(points_from_curr, 1, v_ids_curr)
 
-    points_from.append(points_from_curr)
-    faces_to.append(faces_to_curr)
+#     points_from.append(points_from_curr)
+#     faces_to.append(faces_to_curr)
 
-    node_tri_mask = proximity_tensor[:, 2] >= 12
-    faces_to_curr = proximity_tensor[node_tri_mask, 1]
-    faces_from_curr = proximity_tensor[node_tri_mask, 0]
-    points_from_curr = faces[faces_from_curr]
-    v_ids_curr = proximity_tensor[node_tri_mask, 2] - 12
-    v_ids_curr = v_ids_curr.unsqueeze(-1)
-    points_from_curr = torch.gather(points_from_curr, 1, v_ids_curr)
+#     node_tri_mask = proximity_tensor[:, 2] >= 12
+#     faces_to_curr = proximity_tensor[node_tri_mask, 1]
+#     faces_from_curr = proximity_tensor[node_tri_mask, 0]
+#     points_from_curr = faces[faces_from_curr]
+#     v_ids_curr = proximity_tensor[node_tri_mask, 2] - 12
+#     v_ids_curr = v_ids_curr.unsqueeze(-1)
+#     points_from_curr = torch.gather(points_from_curr, 1, v_ids_curr)
 
-    points_from.append(points_from_curr)
-    faces_to.append(faces_to_curr)
+#     points_from.append(points_from_curr)
+#     faces_to.append(faces_to_curr)
 
-    points_from = torch.cat(points_from)[:, 0]
-    faces_to = torch.cat(faces_to)
+#     points_from = torch.cat(points_from)[:, 0]
+#     faces_to = torch.cat(faces_to)
 
-    return points_from, faces_to
+#     return points_from, faces_to
 
 
 def get_node2face_signed_distance(vertices, faces, f_normals, points_from, faces_to, detach_faces=False):
@@ -386,47 +393,47 @@ class ContCollPt:
         return tri_pairs, ctype, roots
 
 
-def get_static_proximity(vertices, faces, radius, n_candidates_per_triangle=32):
-    """
+# def get_static_proximity(vertices, faces, radius, n_candidates_per_triangle=32):
+#     """
 
-    :param vertices: torch.FloatTensor Vx3
-    :param faces: torch.LongTensor Fx3
-    :param radius: float
-    :return: torch.LongTensor Cx3
-    """
-    triangles = vertices[faces].unsqueeze(dim=0).contiguous()
-    bboxes, tree = collisions.bvh(triangles)
-    proximity_tensor, = collisions.find_proximity(bboxes, tree, triangles, radius, n_candidates_per_triangle)
-    proximity_tensor = proximity_tensor[0]
-    mask = proximity_tensor[:, 0] >= 0
-    proximity_tensor = proximity_tensor[mask, :]
-    return proximity_tensor
+#     :param vertices: torch.FloatTensor Vx3
+#     :param faces: torch.LongTensor Fx3
+#     :param radius: float
+#     :return: torch.LongTensor Cx3
+#     """
+#     triangles = vertices[faces].unsqueeze(dim=0).contiguous()
+#     bboxes, tree = collisions.bvh(triangles)
+#     proximity_tensor, = collisions.find_proximity(bboxes, tree, triangles, radius, n_candidates_per_triangle)
+#     proximity_tensor = proximity_tensor[0]
+#     mask = proximity_tensor[:, 0] >= 0
+#     proximity_tensor = proximity_tensor[mask, :]
+#     return proximity_tensor
 
 
-def get_continuous_collisions(vertices_from, vertices_to, faces, n_candidates_per_triangle=32,
-                              n_collisions_per_triangle=16):
-    """
+# def get_continuous_collisions(vertices_from, vertices_to, faces, n_candidates_per_triangle=32,
+#                               n_collisions_per_triangle=16):
+#     """
 
-    :param vertices: torch.FloatTensor Vx3
-    :param faces: torch.LongTensor Fx3
-    :param radius: float
-    :return: cont_collisions: torch.LongTensor Cx3, roots: torch.FloatTensor Cx1
-    """
-    # print(n_candidates_per_triangle, n_collisions_per_triangle)
-    triangles_from = vertices_from[faces].unsqueeze(dim=0).contiguous()
-    triangles_to = vertices_to[faces].unsqueeze(dim=0).contiguous()
+#     :param vertices: torch.FloatTensor Vx3
+#     :param faces: torch.LongTensor Fx3
+#     :param radius: float
+#     :return: cont_collisions: torch.LongTensor Cx3, roots: torch.FloatTensor Cx1
+#     """
+#     # print(n_candidates_per_triangle, n_collisions_per_triangle)
+#     triangles_from = vertices_from[faces].unsqueeze(dim=0).contiguous()
+#     triangles_to = vertices_to[faces].unsqueeze(dim=0).contiguous()
 
-    bboxes, tree = collisions.bvh_motion(triangles_from, triangles_to)
-    cont_collisions, roots = collisions.find_collisions_continuous(bboxes, tree, triangles_from, triangles_to,
-                                                                   n_candidates_per_triangle, n_collisions_per_triangle)
-    cont_collisions = cont_collisions[0]
-    roots = roots[0]
-    # print(roots.shape)
-    mask = cont_collisions[:, 0] >= 0
-    cont_collisions = cont_collisions[mask, :]
-    roots = roots[mask, :]
+#     bboxes, tree = collisions.bvh_motion(triangles_from, triangles_to)
+#     cont_collisions, roots = collisions.find_collisions_continuous(bboxes, tree, triangles_from, triangles_to,
+#                                                                    n_candidates_per_triangle, n_collisions_per_triangle)
+#     cont_collisions = cont_collisions[0]
+#     roots = roots[0]
+#     # print(roots.shape)
+#     mask = cont_collisions[:, 0] >= 0
+#     cont_collisions = cont_collisions[mask, :]
+#     roots = roots[mask, :]
 
-    return cont_collisions, roots
+#     return cont_collisions, roots
 
 
 class CollisionHelper:

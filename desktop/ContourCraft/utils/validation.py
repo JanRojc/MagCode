@@ -83,7 +83,7 @@ def load_runner_and_material_from_checkpoint(checkpoint_path: str, modules: dict
 def create_one_sequence_dataloader(use_config=None, dataset_name=None, dataloader_type='inference', **kwargs) -> DataLoader:
 
     if use_config is not None:
-        config_dir = Path(DEFAULTS.project_dir) / 'configs'
+        config_dir = Path(DEFAULTS.config_dir)
         config_path = os.path.join(config_dir, use_config + '.yaml')
         conf_file = OmegaConf.load(config_path)
 
@@ -156,7 +156,7 @@ def replace_model(modules: dict, current_config: DictConfig, model_config_name: 
 
 
     if config_dir is None:
-        config_dir = Path(DEFAULTS.project_dir) / 'configs'
+        config_dir = Path(DEFAULTS.config_dir)
 
     model_config_path = os.path.join(config_dir, model_config_name + '.yaml')
     model_config = OmegaConf.load(model_config_path)
