@@ -2,7 +2,7 @@
 venv*
 
 # data
-desktop/data
+Data
 
 # testing
 testing.ipynb
