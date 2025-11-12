@@ -60,7 +60,7 @@ def load_runner_from_checkpoint(checkpoint_path: str, modules: dict, experiment_
     :return: runner_module: .py module containing the Runner class
                 runner: Runner object
     """
-    sd = torch.load(checkpoint_path)
+    sd = torch.load(checkpoint_path, map_location=torch.device('cpu'))
     runner_module, runner = _load_runner_from_state_dict(modules, experiment_config, sd)
 
     return runner_module, runner
