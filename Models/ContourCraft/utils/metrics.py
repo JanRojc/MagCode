@@ -130,7 +130,7 @@ def _compute_and_store_metrics_vs_sota(seqs_root, out_file, canonicalpos_dict_pa
                                        verbose=True):
 
     # build runner object and exemplar sample
-    runner, sample = get_runner_and_sample_for_metrics('aux/metrics')
+    runner, sample = get_runner_and_sample_for_metrics('aux_folder/metrics')
 
     all_metrics_dict = defaultdict(lambda: defaultdict(dict))
 

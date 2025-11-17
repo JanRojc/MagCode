@@ -38,7 +38,7 @@ class Simulator:
 
     def _create_zeropos_sample(self, garment_name, n_frames=200, **kwargs):
         
-        config = 'aux/untangle'
+        config = 'aux_folder/untangle'
         dataloader = create_one_sequence_dataloader(use_config=config, data_root='', single_sequence_file=None,
                                                     single_sequence_garment=garment_name,
                                                     sequence_loader=self.sequence_loader, n_frames=n_frames, **kwargs)
