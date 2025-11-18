@@ -1,18 +1,10 @@
 from collections import defaultdict
 from time import time
-
-# CPU fallback
-import pandas as cudf
-import networkx as cugraph
-
-# GPU
-# import cudf
-# import cugraph
-
+import cudf
+import cugraph
 import numpy as np
 import torch
-# NNOCUDA fix
-# import cccollisions
+import cccollisions
 import torch_scatter
 from utils.io import pickle_dump, save_obj
 from utils.common import triangles_to_edges
@@ -154,21 +146,15 @@ def binmasks2onehot(binmasks):
 def get_triedge_candidates(verts, faces):
     triangles = verts[faces].unsqueeze(0).contiguous()
 
-    # bboxes, tree = cccollisions.bvh(triangles)
-    # collision_tensor, binmasks = cccollisions.find_triangle_edge_candidates2(bboxes, tree, triangles, max_collisions=64)
-    # collision_tensor = collision_tensor[0]
-    # binmasks = binmasks[0]
+    bboxes, tree = cccollisions.bvh(triangles)
+    collision_tensor, binmasks = cccollisions.find_triangle_edge_candidates2(bboxes, tree, triangles, max_collisions=64)
+    collision_tensor = collision_tensor[0]
+    binmasks = binmasks[0]
 
-    collision_tensor = torch.empty((0, 4), dtype=torch.long, device='cpu')
-    binmasks = torch.empty((0, 2), dtype=torch.long, device='cpu')
-    # collision_tensor = torch.tensor([[0, 0, 0, 0]], dtype=torch.long, device='cpu')
-    # binmasks = torch.tensor([[0, 0]], dtype=torch.long, device='cpu')
 
-    
-
-    # mask = collision_tensor[:, 0] != -1
-    # collision_tensor = collision_tensor[mask]
-    # binmasks = binmasks[mask]
+    mask = collision_tensor[:, 0] != -1
+    collision_tensor = collision_tensor[mask]
+    binmasks = binmasks[mask]
 
     typemasks, loopmasks = binmasks2onehot(binmasks)
 
