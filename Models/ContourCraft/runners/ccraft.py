@@ -71,14 +71,11 @@ class SafecheckConfig:
     device: str = II('device')
 
 
-# fix
-from dataclasses import dataclass, field
-
 @dataclass
 class Config:
-    optimizer: OptimConfig = field(default_factory=OptimConfig)
-    material: MaterialConfig = field(default_factory=MaterialConfig)
-    safecheck: SafecheckConfig = field(default_factory=SafecheckConfig)
+    optimizer: OptimConfig = OptimConfig()
+    material: MaterialConfig = MaterialConfig()
+    safecheck: SafecheckConfig = SafecheckConfig()
     warmup_steps: int = 100
     increase_roll_every: int = 5000
     roll_max: int = 5
