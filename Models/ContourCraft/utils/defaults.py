@@ -10,13 +10,13 @@ DEFAULTS = dict()
 DEFAULTS['project_name'] = 'ccraft'
 
 
-DEFAULTS['data_root'] = '/path/to/ccraft_data'
+DEFAULTS['data_root'] = '/mnt/d/ClothSim/ccraft_data/'
 DEFAULTS['aux_data'] = os.path.join(DEFAULTS['data_root'], 'aux_data')
-DEFAULTS['project_dir'] = 'path/to/this/repo'
-DEFAULTS['config_dir'] = '/path/to/ccraft_configs'
+DEFAULTS['project_dir'] = '/home/janr/documents/MagCode/Models/ContourCraft/'
+DEFAULTS['config_dir'] = '/home/janr/documents/MagCode/Models/ContourCraft/configs/'
 
 DEFAULTS['experiment_root'] = os.path.join(DEFAULTS['data_root'], 'experiments')
 
-DEFAULTS['CMU_root'] = '/path/to/AMASS/smpl/CMU'
+DEFAULTS['CMU_root'] = '/mnt/d/ClothSim/AMASS/smpl/CMU/'
 
 DEFAULTS = munchify(DEFAULTS)

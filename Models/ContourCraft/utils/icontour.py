@@ -1,7 +1,6 @@
 from collections import defaultdict
 from time import time
-import cudf
-import cugraph
+import pandas as pd
 import numpy as np
 import torch
 import cccollisions
@@ -632,9 +631,12 @@ def make_edge_df(edges, with_inverse=False):
     if with_inverse:
         edges = torch.cat([edges, edges[:, [1,0]]], dim=0)
 
-    df = cudf.DataFrame()
-    df['src'] = edges[:, 0].cpu().numpy()
-    df['dst'] = edges[:, 1].cpu().numpy()
+    src = edges[:, 0].detach().cpu().numpy()
+    dst = edges[:, 1].detach().cpu().numpy()
+
+    # pandas fallback
+    df = pd.DataFrame({"src": src, "dst": dst})
+
     return df
 
 
@@ -645,14 +647,30 @@ def replace_node_ids_with_components(full_graph_edges, loop_node_ids, sli_offset
     edges_noloop = full_graph_edges[~torch.isin(full_graph_edges, loop_node_ids).any(dim=-1)]
     edges_nosl = edges_noloop[(edges_noloop < sli_offset).all(dim=-1)]
 
-    edges_df = make_edge_df(edges_nosl)
-    graph_contour = cugraph.Graph()
-    graph_contour.from_cudf_edgelist(edges_df, source='src', destination='dst')
+    if edges_nosl.numel() == 0:
+        # No edges -> no components to replace, just return trivial mappings
+        ni2count_dict = {}
+        ni2nodes_dict = {}
+        return full_graph_edges, ni2count_dict, ni2nodes_dict, components_offset
 
-    components = cugraph.connected_components(graph_contour)
-    components = torch.LongTensor(components.to_numpy()).to(full_graph_edges.device)
+    # Build an undirected graph on CPU
+    edges_np = edges_nosl.detach().cpu().numpy()
+    G = nx.Graph()
+    G.add_edges_from(edges_np)
 
+    # Compute connected components; mimic cugraph output: (vertex, component_label)
+    components_list = list(nx.connected_components(G))
+    node_ids = []
+    comp_labels = []
+    for cid, comp in enumerate(components_list):
+        for n in comp:
+            node_ids.append(n)
+            comp_labels.append(cid)
 
+    node_ids_t = torch.tensor(node_ids, dtype=torch.long, device=full_graph_edges.device)
+    comp_labels_t = torch.tensor(comp_labels, dtype=torch.long, device=full_graph_edges.device)
+
+    components = torch.stack([node_ids_t, comp_labels_t], dim=1)
     clabels_unique, clables, counts = torch.unique(components[:, 1], return_inverse=True, return_counts=True)
     node_ids = components[:, 0]
 
@@ -681,7 +699,6 @@ def replace_node_ids_with_components(full_graph_edges, loop_node_ids, sli_offset
 
     asort = torch.argsort(full_graph_edges, dim=-1)
     full_graph_edges = torch.gather(full_graph_edges, 1, asort)
-
     full_graph_edges = torch.unique(full_graph_edges, dim=0)
 
     return full_graph_edges, ni2count_dict, ni2nodes_dict, components_offset
