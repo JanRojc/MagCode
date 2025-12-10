@@ -3,7 +3,8 @@ import maya.cmds as cmds
 sel = cmds.ls(selection=True)
 verts = []
 for vert in sel:
-    vert = vert[12:-1]
+    vert = vert.split("[")[1]
+    vert = vert.split("]")[0]
     if ":" in vert:
         i = int(vert.split(":")[0])
         j = int(vert.split(":")[1])
