@@ -1,5 +1,7 @@
 import os
-import tensorboardX
+# import tensorboardX
+from torch.utils.tensorboard import SummaryWriter
+
 import argparse
 import torch
 from torch.utils.data import DataLoader
@@ -82,7 +84,7 @@ class Trainer(object):
         self.best_epoch = -1
 
         # logger
-        self.logger = tensorboardX.SummaryWriter(os.path.join(self.log_dir))
+        self.logger = SummaryWriter(os.path.join(self.log_dir))
         self.csv_logger = self.get_logger()
 
     def load_dataset(self, split):

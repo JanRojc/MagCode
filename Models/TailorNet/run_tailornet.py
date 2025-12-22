@@ -15,7 +15,7 @@ from visualization.vis_utils import get_specific_shape, get_amass_sequence_theta
 from utils.interpenetration import remove_interpenetration_fast
 
 # Set output path where inference results will be stored
-OUT_PATH = "/BS/cpatel/work/code_test2"
+OUT_PATH = "/mnt/d/ClothSim/Results/TailorNet"
 
 
 def get_single_frame_inputs(garment_class, gender):
@@ -72,8 +72,8 @@ def get_sequence_inputs(garment_class, gender):
 
 
 def run_tailornet():
-    gender = 'female'
-    garment_class = 'skirt'
+    gender = 'male'
+    garment_class = 't-shirt'
     thetas, betas, gammas = get_single_frame_inputs(garment_class, gender)
     # # uncomment the line below to run inference on sequence data
     # thetas, betas, gammas = get_sequence_inputs(garment_class, gender)

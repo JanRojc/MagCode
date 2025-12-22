@@ -2,7 +2,7 @@ import os
 import pickle
 import chumpy as ch
 import numpy as np
-import cv2
+# import cv2
 from psbody.mesh import Mesh
 from smpl_lib.ch_smpl import Smpl
 from utils.smpl_paths import SmplPaths
@@ -21,9 +21,11 @@ class SMPL4Garment(object):
 
         # skirt_weight: n_skirt x n_body
         # skirt_skinning: n_skirt x 24
-        self.skirt_weight = ch.array(np.load(os.path.join(
-            global_var.DATA_DIR, 'skirt_weight.npz'))['w'])
-        self.skirt_skinning = self.skirt_weight.dot(self.smpl_base.weights)
+
+        # don't need skirt weights
+        # self.skirt_weight = ch.array(np.load(os.path.join(
+        #     global_var.DATA_DIR, 'skirt_weight.npz'))['w'])
+        # self.skirt_skinning = self.skirt_weight.dot(self.smpl_base.weights)
 
     def run(self, beta=None, theta=None, garment_d=None, garment_class=None):
         """Outputs body and garment of specified garment class given theta, beta and displacements."""

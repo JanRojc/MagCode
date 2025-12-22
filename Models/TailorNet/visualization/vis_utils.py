@@ -1,5 +1,5 @@
 import numpy as np
-
+import os
 
 def get_amass_sequence_thetas(which):
     # ['01_08', '01_14', '05_02', '05_04', '05_05', '05_06', '05_07', '86_07']
@@ -36,7 +36,7 @@ def get_specific_pose(which):
     `which` index can be 0, 1, 2, ..., 10
     0 - apose
     """
-    thetas = np.load('./visualization/some_thetas.npy')
+    thetas = np.load(os.path.dirname(__file__) + '/some_thetas.npy')
     which = int(which)
     return thetas[which]
 
