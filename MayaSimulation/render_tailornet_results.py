@@ -392,6 +392,11 @@ def _set_viewport2_defaults():
     except Exception:
         pass
 
+def _apply_rotation_fix(xforms, rx=0.0, ry=0.0, rz=0.0):
+    """Rotate transforms by given degrees (relative, object-space)."""
+    for x in xforms:
+        cmds.rotate(rx, ry, rz, x, r=True, os=True, fo=True)
+
 def _import_frame_meshes(results_path, frame_idx, pad=4,
                          body_color=(0.2, 0.2, 0.2),
                          gar_color=(0.2, 0.6, 1.0),
@@ -413,6 +418,8 @@ def _import_frame_meshes(results_path, frame_idx, pad=4,
         color=body_color,
         color_mode=color_mode,
     )
+
+    _apply_rotation_fix(["polySurface1", "polySurface2"], rz=-90)
     return body_xform, gar_xform
 
 def _delete_nodes(nodes):
