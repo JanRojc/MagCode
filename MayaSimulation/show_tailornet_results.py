@@ -355,6 +355,7 @@ def _clear_scene_keep_cameras():
 
 # ----------------------------------------------------------------------------------------------------------- #
 results_path = "/Users/jan.rojc/Documents/MagCode/Data/Results/TailorNet/"
+if not os.path.exists(results_path): results_path = "D:/ClothSim/Results/TailorNet/"
 result_index = "0000"
 
 # clear scene
