@@ -1,11 +1,20 @@
 import numpy as np
 import os
+import global_var
 
-def get_amass_sequence_thetas(which):
+def get_saved_amass_sequence_thetas(which):
     # ['01_08', '01_14', '05_02', '05_04', '05_05', '05_06', '05_07', '86_07']
-    seqs = np.load('./visualization/amass_sequences.npy', allow_pickle=True, encoding='latin1').item()
+    seqs = np.load(os.path.dirname(__file__) + '/amass_sequences.npy', allow_pickle=True, encoding='latin1').item()
     assert(which in seqs.keys())
     return seqs[which]
+
+def get_any_amass_sequence_thetas(folder_name, seq_name):
+    seq_path = os.path.join(global_var.AMASS_PATH, folder_name, seq_name+"_poses.npz")
+    frame = np.load(seq_path, allow_pickle=True, encoding='latin1')
+    thetas = frame["poses"][:, :72].astype(np.float32)
+    # thetas[:, :3] = 0.0
+    return thetas
+
 
 
 def get_specific_shape(which):
@@ -67,5 +76,5 @@ def get_specific_style_old_tshirt(which):
 
 
 if __name__ == '__main__':
-    get_amass_sequence_thetas('05_04')
+    get_saved_amass_sequence_thetas('05_04')
     get_specific_pose(0)

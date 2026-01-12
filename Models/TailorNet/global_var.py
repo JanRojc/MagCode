@@ -4,11 +4,12 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Dataset root directory. Change it to point to downloaded data root directory.
 DATA_DIR = '/mnt/d/ClothSim/TailorNet/data/'
+AMASS_PATH = "/mnt/d/ClothSim/AMASS/CMU/"
 
 # Set the paths to SMPL model
-SMPL_PATH_NEUTRAL = '/mnt/d/ClothSim/TailorNet/smpl/basicModel_f_lbs_10_207_0_v1.0.0.pkl'
-SMPL_PATH_MALE = '/mnt/d/ClothSim/TailorNet/smpl/basicmodel_m_lbs_10_207_0_v1.0.0.pkl'
-SMPL_PATH_FEMALE = '/mnt/d/ClothSim/TailorNet/smpl/basicModel_f_lbs_10_207_0_v1.0.0.pkl'
+SMPL_PATH_NEUTRAL = '/mnt/d/ClothSim/smpl/basicModel_f_lbs_10_207_0_v1.0.0.pkl'
+SMPL_PATH_MALE = '/mnt/d/ClothSim/smpl/basicmodel_m_lbs_10_207_0_v1.0.0.pkl'
+SMPL_PATH_FEMALE = '/mnt/d/ClothSim/smpl/basicModel_f_lbs_10_207_0_v1.0.0.pkl'
 
 # Log directory where training logs, checkpoints and visualizations will be stored
 LOG_DIR = '/mnt/d/ClothSim/Results/TailorNet/Log'

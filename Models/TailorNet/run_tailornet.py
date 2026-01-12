@@ -11,11 +11,11 @@ from visualization.blender_renderer import visualize_garment_body
 
 from dataset.canonical_pose_dataset import get_style, get_shape
 from visualization.vis_utils import get_specific_pose, get_specific_style_old_tshirt
-from visualization.vis_utils import get_specific_shape, get_amass_sequence_thetas
+from visualization.vis_utils import get_specific_shape, get_saved_amass_sequence_thetas, get_any_amass_sequence_thetas
 from utils.interpenetration import remove_interpenetration_fast
 
 # Set output path where inference results will be stored
-OUT_PATH = "/mnt/d/ClothSim/Results/TailorNet"
+OUT_PATH = "/mnt/d/ClothSim/Results/TailorNet/"
 
 
 def get_single_frame_inputs(garment_class, gender):
@@ -64,7 +64,13 @@ def get_sequence_inputs(garment_class, gender):
         gamma = get_style('000', gender=gender, garment_class=garment_class)
 
     # downsample sequence frames by 2
-    thetas = get_amass_sequence_thetas('05_02')[::2]
+    # thetas = get_saved_amass_sequence_thetas('05_02')[::2]
+    thetas = get_any_amass_sequence_thetas("05", "05_02")[200:1000:10]
+
+    # thetas = get_saved_amass_sequence_thetas('05_02')[:2]
+    # thetas[:, :3] = 0
+    # thetas = get_any_amass_sequence_thetas("05", "05_02")[:]
+
 
     betas = np.tile(beta[None, :], [thetas.shape[0], 1])
     gammas = np.tile(gamma[None, :], [thetas.shape[0], 1])
@@ -74,9 +80,9 @@ def get_sequence_inputs(garment_class, gender):
 def run_tailornet():
     gender = 'male'
     garment_class = 't-shirt'
-    thetas, betas, gammas = get_single_frame_inputs(garment_class, gender)
-    # # uncomment the line below to run inference on sequence data
-    # thetas, betas, gammas = get_sequence_inputs(garment_class, gender)
+    # thetas, betas, gammas = get_single_frame_inputs(garment_class, gender)
+    # uncomment the line below to run inference on sequence data
+    thetas, betas, gammas = get_sequence_inputs(garment_class, gender)
 
     # load model
     tn_runner = get_tn_runner(gender=gender, garment_class=garment_class)
@@ -93,6 +99,7 @@ def run_tailornet():
         print(i, len(thetas))
         # normalize y-rotation to make it front facing
         theta_normalized = normalize_y_rotation(theta)
+        # theta_normalized = theta
         with torch.no_grad():
             pred_verts_d = tn_runner.forward(
                 thetas=torch.from_numpy(theta_normalized[None, :].astype(np.float32)).cuda(),
@@ -101,7 +108,7 @@ def run_tailornet():
             )[0].cpu().numpy()
 
         # get garment from predicted displacements
-        body, pred_gar = smpl.run(beta=beta, theta=theta, garment_class=garment_class, garment_d=pred_verts_d)
+        body, pred_gar = smpl.run(beta=beta, theta=theta_normalized, garment_class=garment_class, garment_d=pred_verts_d)
         pred_gar = remove_interpenetration_fast(pred_gar, body)
 
         # save body and predicted garment
@@ -138,3 +145,35 @@ if __name__ == '__main__':
         render_images()
     else:
         raise AttributeError
+
+    # import numpy as np
+
+    # raw = get_any_amass_sequence_thetas("05", "05_02")
+    # sav = get_saved_amass_sequence_thetas("05_02")
+
+    # print("raw shape:", raw.shape, "saved shape:", sav.shape)
+
+    # T = min(len(raw), len(sav))
+    # raw = raw[:T]
+    # sav = sav[:T]
+
+    # # Root stats
+    # print("root raw mean/std:", raw[:, :3].mean(0), raw[:, :3].std(0))
+    # print("root sav mean/std:", sav[:, :3].mean(0), sav[:, :3].std(0))
+
+    # # Body pose stats (excluding root)
+    # print("body raw mean/std:", raw[:, 3:72].mean(), raw[:, 3:72].std())
+    # print("body sav mean/std:", sav[:, 3:72].mean(), sav[:, 3:72].std())
+
+    # # Direct difference
+    # diff = np.linalg.norm(raw - sav, axis=1)
+    # print("per-frame L2 diff: min/mean/max", diff.min(), diff.mean(), diff.max())
+
+    # # Specifically: is saved basically raw with root zeroed?
+    # diff_root_zeroed = np.linalg.norm(raw.copy().astype(np.float32) - sav, axis=1)
+    # raw_z = raw.copy()
+    # raw_z[:, :3] = 0
+    # diff_if_root_zeroed = np.linalg.norm(raw_z - sav, axis=1)
+    # print("mean diff:", diff.mean())
+    # print("mean diff if root zeroed:", diff_if_root_zeroed.mean())
+
