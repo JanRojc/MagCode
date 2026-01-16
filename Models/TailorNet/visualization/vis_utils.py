@@ -17,7 +17,6 @@ def get_any_amass_sequence_thetas(folder_name, seq_name):
     return thetas, mocap_fps
 
 
-
 def get_specific_shape(which):
     betas = np.zeros(10, dtype=np.float32)
     if which == 'mean':
