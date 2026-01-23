@@ -65,7 +65,9 @@ def get_sequence_inputs(garment_class, gender):
 
     # downsample sequence frames by 2
     # thetas = get_saved_amass_sequence_thetas('05_02')[::2]
-    thetas = get_any_amass_sequence_thetas("05", "05_02")[200:1000:10]
+    # thetas = get_any_amass_sequence_thetas("05", "05_02")[1000:2000:10]
+    thetas = get_any_amass_sequence_thetas("08", "08_05")[::2]
+
 
     # thetas = get_saved_amass_sequence_thetas('05_02')[:2]
     # thetas[:, :3] = 0
