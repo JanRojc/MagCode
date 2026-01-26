@@ -327,7 +327,6 @@ def _read_scalar(f, t):
     code, _ = _SCALAR_FMT[t]
     return _unpack(f, "<" + code)[0]
 
-
 def _skip_scalar(f, t):
     if t not in _SCALAR_FMT:
         raise RuntimeError(f"Unsupported scalar type '{t}'.")
@@ -335,7 +334,7 @@ def _skip_scalar(f, t):
     b = f.read(nbytes)
     if len(b) != nbytes:
         raise RuntimeError("Unexpected EOF while skipping binary PLY data.")
-    
+
 def _mint_array(seq):
     # Most compatible across Maya builds: append()
     arr = om.MIntArray()
@@ -379,7 +378,6 @@ def _setup_camera(cam="persp", fit=True):
     # Make sure persp exists and is renderable
     if not cmds.objExists(cam):
         raise RuntimeError(f"Camera '{cam}' not found.")
-    # Optionally frame all after import per frame; we do that in loop if requested
     cmds.lookThru(cam)
 
 def _set_viewport2_defaults():
@@ -460,11 +458,9 @@ def render_sequence_to_images_vp2(
     _set_viewport2_defaults()
 
     # Render each frame to a still (playblast frame-by-frame)
-    # We create a temporary timeline so playblast writes correctly.
     cmds.playbackOptions(min=0, max=len(frames)-1)
     cmds.currentTime(0)
 
-    # We'll import meshes per frame, frame them optionally, then playblast single frame.
     for local_i, frame_idx in enumerate(frames):
         cmds.currentTime(local_i, edit=True)
 
@@ -474,7 +470,6 @@ def render_sequence_to_images_vp2(
         body_node, gar_node = _import_frame_meshes(results_path, frame_idx, pad=pad)
 
         if fit_camera_each_frame:
-            # frame all visible objects in the active view
             try:
                 cmds.viewFit(cam, all=True)
             except Exception:
@@ -485,8 +480,7 @@ def render_sequence_to_images_vp2(
         print(out_path_noext)
         cmds.playblast(
             format="image",
-            # filename=os.path.join(out_dir, "frame_"),
-            filename=out_path_noext,  # Maya appends .png/.jpg
+            filename=out_path_noext,  # Maya appends extension
             framePadding=4,
             compression=image_ext,
             frame=local_i,
@@ -515,6 +509,7 @@ def images_to_mp4_ffmpeg(img_dir, out_mp4, fps=30, pad=4, image_ext="png"):
     out_mp4 = os.path.abspath(out_mp4)
     _ensure_dir(os.path.dirname(out_mp4))
 
+    # matches frame_0000.0000.png etc
     pattern = os.path.join(img_dir, f"frame_%0{pad}d.0000.{image_ext}")
     ffmpeg = _find_ffmpeg()
 
@@ -529,7 +524,6 @@ def images_to_mp4_ffmpeg(img_dir, out_mp4, fps=30, pad=4, image_ext="png"):
         out_mp4,
     ]
 
-    # Run ffmpeg
     try:
         p = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
@@ -543,40 +537,57 @@ def images_to_mp4_ffmpeg(img_dir, out_mp4, fps=30, pad=4, image_ext="png"):
     if p.returncode != 0:
         raise RuntimeError(f"ffmpeg failed:\nSTDOUT:\n{p.stdout}\nSTDERR:\n{p.stderr}")
 
+    for file in os.listdir(img_dir):
+        os.remove(img_dir+file)
+    os.rmdir(img_dir)
+
     return out_mp4
+
+def get_next_output_mp4(base_dir, base_name="output", ext=".mp4"):
+    """
+    Returns a path like base_dir/output_0.mp4, output_1.mp4, ...
+    picking the first one that doesn't exist.
+    """
+    i = 0
+    while True:
+        candidate = os.path.join(base_dir, f"{base_name}_{i}{ext}")
+        if not os.path.exists(candidate):
+            return candidate
+        i += 1
 
 # ---------------------------------------------------------------------
 # Example usage
 # ---------------------------------------------------------------------
-results_path = "/Users/jan.rojc/Documents/MagCode/Data/Results/TailorNet/"
-if not os.path.exists(results_path):
-    results_path = "D:/ClothSim/Results/TailorNet/"
+results_path = "D:/ClothSim/Results/TailorNet/"
+result_ply_files_path = os.path.join(results_path, "result_ply_files")
+imgs_path = os.path.join(results_path, "_image_renders")
 
-img_out = os.path.join(results_path, "_image_renders")
-mp4_out = os.path.join(results_path, "_tailornet_preview.mp4")
-if os.path.exists(mp4_out):
-    print("Removing existing mp4:", mp4_out)
-    os.remove(mp4_out)
+if not os.path.exists(results_path):
+    results_path = "/Users/jan.rojc/Documents/MagCode/Data/Results/TailorNet/"
+
+# video as output_0.mp4 / output_1.mp4 / ...
+mp4_out = get_next_output_mp4(results_path, base_name="output", ext=".mp4")
+print("Will write video to:", mp4_out)
 
 # Render to images
 render_sequence_to_images_vp2(
-    results_path=results_path,
-    out_dir=img_out,
+    results_path=result_ply_files_path,
+    out_dir=imgs_path,
     cam="persp",
     start=None,
     end=None,
     pad=4,
     width=1024,
     height=1024,
-    fit_camera_each_frame=False,  # set True if framing is off
+    fit_camera_each_frame=False,
     image_ext="png",
 )
 
 # Assemble to video
 images_to_mp4_ffmpeg(
-    img_dir=img_out,
+    img_dir=imgs_path,
     out_mp4=mp4_out,
-    fps=10,       # match your intended playback
+    fps=30,       # match your intended playback
     pad=4,
     image_ext="png",
 )
