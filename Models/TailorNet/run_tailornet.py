@@ -15,7 +15,7 @@ from visualization.vis_utils import get_specific_shape, get_saved_amass_sequence
 from utils.interpenetration import remove_interpenetration_fast
 
 # Set output path where inference results will be stored
-OUT_PATH = "/mnt/d/ClothSim/Results/TailorNet/"
+OUT_PATH = "/mnt/d/ClothSim/Results/TailorNet/result_ply_files/"
 
 
 def get_single_frame_inputs(garment_class, gender):
@@ -55,7 +55,7 @@ def get_single_frame_inputs(garment_class, gender):
     return thetas, betas, gammas
 
 
-def get_sequence_inputs(garment_class, gender):
+def get_sequence_inputs(garment_class, gender, amass_sequence="05", amass_seq_num="01"):
     """Prepare sequence inputs."""
     beta = get_specific_shape('somethin')
     if garment_class == 'old-t-shirt':
@@ -65,8 +65,12 @@ def get_sequence_inputs(garment_class, gender):
 
     # downsample sequence frames by 2
     # thetas = get_saved_amass_sequence_thetas('05_02')[::2]
-    # thetas = get_any_amass_sequence_thetas("05", "05_02")[1000:2000:10]
-    thetas = get_any_amass_sequence_thetas("08", "08_05")[::2]
+    # thetas, _ = get_any_amass_sequence_thetas("05", "05_02")[1000:2000:10]
+    thetas, mocap_fps = get_any_amass_sequence_thetas(amass_sequence, amass_seq_num)
+    
+    target_fps = 30  # match ccraft
+    subsample_step = int(round(mocap_fps / target_fps)) # usually 120 / 30 = 4
+    thetas = thetas[::subsample_step]
 
 
     # thetas = get_saved_amass_sequence_thetas('05_02')[:2]
@@ -80,11 +84,11 @@ def get_sequence_inputs(garment_class, gender):
 
 
 def run_tailornet():
-    gender = 'male'
+    gender = 'female'
     garment_class = 't-shirt'
     # thetas, betas, gammas = get_single_frame_inputs(garment_class, gender)
     # uncomment the line below to run inference on sequence data
-    thetas, betas, gammas = get_sequence_inputs(garment_class, gender)
+    thetas, betas, gammas = get_sequence_inputs(garment_class, gender, "05", "05_02")
 
     # load model
     tn_runner = get_tn_runner(gender=gender, garment_class=garment_class)

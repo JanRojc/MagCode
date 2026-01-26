@@ -12,8 +12,9 @@ def get_any_amass_sequence_thetas(folder_name, seq_name):
     seq_path = os.path.join(global_var.AMASS_PATH, folder_name, seq_name+"_poses.npz")
     frame = np.load(seq_path, allow_pickle=True, encoding='latin1')
     thetas = frame["poses"][:, :72].astype(np.float32)
+    mocap_fps  = frame["mocap_framerate"].item()
     # thetas[:, :3] = 0.0
-    return thetas
+    return thetas, mocap_fps
 
 
 
