@@ -30,6 +30,14 @@ def spawn_obj(obj_path, clearScene=False):
         cmds.error("Failed to import OBJ: {}".format(e))
 
 
-obj_dir = "/Users/jan.rojc/Documents/MagCode/Data/ccraft_data/aux_data/garment_meshes/smpl/"
-obj_name = "aaron_009::top.obj"
-spawn_obj(obj_dir+obj_name, clearScene=True)
+# ccraft garment
+obj_dir = "D:/ClothSim/ccraft_data/aux_data/garment_meshes/smpl/"
+obj_name = "aaron_009__top.obj"
+
+# tailornet garment
+#obj_name = "t-shirt_male_000_000.obj"
+
+# AMASS body
+#obj_dir = "D:/ClothSim/AMASS/CMU/05/"
+#obj_name = "body_frame000.obj"
+spawn_obj(obj_dir+obj_name, clearScene=False)

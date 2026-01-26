@@ -11,6 +11,7 @@ DEFAULTS['project_name'] = 'ccraft'
 
 
 DEFAULTS['data_root'] = '/Users/jan.rojc/Documents/MagCode/Data/ccraft_data/'
+DEFAULTS['results_dir'] = '/Users/jan.rojc/Documents/MagCode/Data/Results/ccraft/'
 DEFAULTS['aux_data'] = os.path.join(DEFAULTS['data_root'], 'aux_data')
 DEFAULTS['project_dir'] = '/Users/jan.rojc/Documents/MagCode/'
 DEFAULTS['config_dir'] = '/Users/jan.rojc/Documents/MagCode/Models/ContourCraft/configs/'

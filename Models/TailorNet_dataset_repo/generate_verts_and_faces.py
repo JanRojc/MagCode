@@ -8,7 +8,7 @@ from smpl_torch import SMPLNP  # works in your TailorNet env
 
 # ---- config ----
 GARMENT_CLASS = "t-shirt"   # e.g. "t-shirt", "shirt", "pant", ...
-GENDER        = "female"
+GENDER        = "female" 
 BETA_STR      = "000"     # from shirt_male/avail.txt
 GAMMA_STR     = "000"     # from shirt_male/avail.txt 
 

@@ -199,7 +199,6 @@ def spawn_tailornet_garment_smpl(
         return
 
     # 4) Use TailorNet's SMPLNP to get *final* body_v, gar_v
-    #    (this is the step my initial script was missing)
     smpl = SMPLNP(gender=gender, cuda=False)
     body_v, gar_v = smpl(beta, apose, unpose_v, garment_class, batch=False)
     # gar_v: (Nv, 3) garment vertices in TailorNet "canonical" pose
