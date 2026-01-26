@@ -105,7 +105,7 @@ class TorchSMPL4Garment(nn.Module):
 
         # with open(model_path, 'rb') as reader:
         #     model = pickle.load(reader, encoding='iso-8859-1')
-        model = np.load(os.path.join(ROOT, 'smpl/smpl_hres_{}.npz'.format(gender)))
+        model = np.load(os.path.join(ROOT, '../../smpl/smpl_hres_{}.npz'.format(gender)))
         with open(os.path.join(ROOT, 'garment_class_info.pkl'), 'rb') as f:
             class_info = pickle.load(f, encoding='latin-1')
         for k in class_info.keys():
@@ -154,11 +154,11 @@ class TorchSMPL4Garment(nn.Module):
         self.cur_device = None
         self.num_verts = 27554
 
-        # skirt_weight: n_skirt, n_body
-        skirt_weight = np.load(os.path.join(ROOT, 'skirt_weight.npz'))['w']
-        self.register_buffer('skirt_weight', torch.from_numpy(skirt_weight).float())
-        skirt_skinning = skirt_weight @ np_weights
-        self.register_buffer('skirt_skinning', torch.from_numpy(skirt_skinning[None]).float())
+        # # skirt_weight: n_skirt, n_body
+        # skirt_weight = np.load(os.path.join(ROOT, 'skirt_weight.npz'))['w']
+        # self.register_buffer('skirt_weight', torch.from_numpy(skirt_weight).float())
+        # skirt_skinning = skirt_weight @ np_weights
+        # self.register_buffer('skirt_skinning', torch.from_numpy(skirt_skinning[None]).float())
 
     def save_obj(self, verts, obj_mesh_name):
         if self.faces is None:
@@ -341,7 +341,7 @@ class SMPL_Lres(nn.Module):
 
         # with open(model_path, 'rb') as reader:
         #     model = pickle.load(reader, encoding='iso-8859-1')
-        model = np.load(os.path.join(ROOT, 'smpl/smpl_{}.npz'.format(gender)))
+        model = np.load(os.path.join(ROOT, '../../smpl/smpl_{}.npz'.format(gender)))
         if sys.version_info.major == 3:
             with open(os.path.join(ROOT, 'garment_class_info.pkl'), 'rb') as f:
                 class_info = pickle.load(f, encoding='latin-1')
