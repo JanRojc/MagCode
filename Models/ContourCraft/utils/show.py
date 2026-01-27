@@ -170,7 +170,7 @@ def write_video(sequence_path: str, video_path: str, renderer: HeadlessRenderer,
     objects = []
     objects += add_seq(sequence_path, cloth_color=cmap(0.))
 
-    positions, targets = path.lock_to_node(objects[0], [0, 0, 3])
+    positions, targets = path.lock_to_node(objects[0], [0, 0, 3])   # [x, z, y]
     camera = PinholeCamera(positions, targets, renderer.window_size[0], renderer.window_size[1], viewer=renderer)
     renderer.scene.nodes = renderer.scene.nodes[:5]
     renderer.playback_fps = fps
