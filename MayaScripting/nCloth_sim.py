@@ -30,34 +30,34 @@ AUTO_PIN_TOP_RATIO = 0.02
 
 # --- PHYSICS PARAMETERS (HEAVY COTTON SETTINGS) ---
 GRAVITY = 9.8
-NUCLEUS_SUBSTEPS = 40             # High substeps essential for stiff constraints
-NUCLEUS_MAX_COLLISION_ITERS = 40
+NUCLEUS_SUBSTEPS = 15             # High substeps essential for stiff constraints
+NUCLEUS_MAX_COLLISION_ITERS = 30
 
 # Mass
 CLOTH_MASS = 0.25                 # kg/m^2 (Slightly heavier than 0.2 for stability)
 
 # Structure (Stiffness)
 CLOTH_STRETCH_RESIST = 800.0      # Locks edge length
-CLOTH_COMPRESSION_RESIST = 800.0  
-CLOTH_SHEAR_RESIST = 0.1          # Prevents "liquid" skewing
-CLOTH_DEFORM_RESIST = 10.0        # KEY: Holds local shape structure (stops fluid look)
-CLOTH_BEND_RESIST = 5.0           # KEY: Higher value = larger, smoother folds (Cotton)
+CLOTH_COMPRESSION_RESIST = 250
+CLOTH_SHEAR_RESIST = 800          # Prevents "liquid" skewing
+CLOTH_DEFORM_RESIST = 0.0        # KEY: Holds local shape structure (stops fluid look)
+CLOTH_BEND_RESIST = 1.0           # KEY: Higher value = larger, smoother folds (Cotton)
 CLOTH_BEND_ANGLE_DROPOFF = 0.6    
 
 # Damping / Drag
-CLOTH_DAMP = 0.2                  # Low to allow motion, high enough to stop jitter
-CLOTH_DRAG = 0.0                  # 0.0 prevents "lagging" behind character
+CLOTH_DAMP = 0.8                  # Low to allow motion, high enough to stop jitter
+CLOTH_DRAG = 0.05                  # 0.0 prevents "lagging" behind character
 CLOTH_TANGENTIAL_DRAG = 0.0
 
 # Friction / Contact
 CLOTH_FRICTION = 0.6
 CLOTH_STICKINESS = 0.1            # Helps keep shirt on shoulders
-CLOTH_THICKNESS = 0.003           # 3mm visual thickness
-COLLIDE_THICKNESS = 0.003
+CLOTH_THICKNESS = 0.005           # 3mm visual thickness
+COLLIDE_THICKNESS = 0.005
 CLOTH_SELF_COLLIDE_WIDTH_SCALE = 1.5 # Padding multiplier for self-collision
 
 # Collider (Body)
-COLLIDER_THICKNESS = 0.003
+COLLIDER_THICKNESS = 0.005
 COLLIDER_FRICTION = 0.6
 COLLIDER_STICKINESS = 0.1
 
@@ -484,14 +484,14 @@ def process_example(sequence_num, sequence_idx, garment, gender):
         write_ply(osp.join(out_dir, f"pred_gar_{idx}.ply"), g_v, gar_faces)
         if frame % 10 == 0:
             print(f"Frame {frame}/{len(verts_seq)}")
-        if frame == 10:
+        if frame == 30:
             break
 
     print(f"DONE: {out_dir}")
 
 if __name__ == "__main__":
     try:
-        process_example("07", "02", "t-shirt", "male")
+        process_example("07", "01", "t-shirt", "male")
     except Exception as e:
         import traceback
         traceback.print_exc()

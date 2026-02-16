@@ -539,7 +539,7 @@ def images_to_mp4_ffmpeg(img_dir, out_mp4, fps=30, pad=4, image_ext="png"):
         raise RuntimeError(f"ffmpeg failed:\nSTDOUT:\n{p.stdout}\nSTDERR:\n{p.stderr}")
 
     for file in os.listdir(img_dir):
-        os.remove(img_dir+file)
+        os.remove(os.path.join(img_dir, file))
     os.rmdir(img_dir)
 
     return out_mp4
