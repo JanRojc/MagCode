@@ -24,16 +24,17 @@ models_dir = Path(DEFAULTS.data_root) / 'trained_models'
 
 # Choose the model and the configuration file
 
-# config_name = 'hood_cvpr'
-# checkpoint_path = models_dir / 'hood_cvpr.pth'
+config_name = 'hood_cvpr'
+checkpoint_path = models_dir / 'hood_cvpr.pth'
 
 # config_name = 'hood_final'
 # checkpoint_path = models_dir / 'hood_final.pth'
 
-config_name = 'contourcraft'
-checkpoint_path = models_dir / 'contourcraft.pth'
+# config_name = 'contourcraft'
+# checkpoint_path = models_dir / 'contourcraft.pth'
 
-if "hood" in config_name:
+isHood = "hood" in config_name
+if isHood:
     DEFAULTS.results_dir = '/mnt/d/ClothSim/Results/hood/'
 
 
@@ -125,7 +126,8 @@ def process_example(sequence_num="05", sequence_idx="02", garment="t-shirt", gen
     command = [
         "cmd.exe", "/c",
         r"C:\Users\janr\Documents\MagCode\.venv_py310\Scripts\python.exe",
-        r"C:\Users\janr\Documents\MagCode\Models\ContourCraft\render_automated.py"
+        r"C:\Users\janr\Documents\MagCode\Models\ContourCraft\render_automated.py",
+        str(isHood)
     ]
 
     subprocess.run(command, check=True)
@@ -133,7 +135,7 @@ def process_example(sequence_num="05", sequence_idx="02", garment="t-shirt", gen
 
 
 
-sequences = ["01", "02", "07"]
+sequences = ["01", "02", "05", "07"]
 sequence_indices = ["01", "02", "03", "04", "05"]
 garments  = ["t-shirt", "shirt", "pant"]
 
@@ -141,6 +143,6 @@ for seq_num in sequences:
     for seq_idx in sequence_indices:
         for garment in garments:
             try:
-                process_example(seq_num, seq_idx, garment, "male")
+                process_example(seq_num, seq_idx, garment, "female")
             except Exception as e:
-                print(f"[FAILED] {seq_num}_{seq_idx} {garment} male: {e}")
+                print(f"[FAILED] {seq_num}_{seq_idx} {garment} female: {e}")
