@@ -28,6 +28,10 @@ CLEAR_SCENE_EACH_RUN = True
 EXPORT_PAD = 4
 AUTO_PIN_TOP_RATIO = 0.02
 
+# edit based on the parameters
+ISSILK = False
+ISDENIM = True
+
 # --- PHYSICS PARAMETERS (HEAVY COTTON SETTINGS) ---
 GRAVITY = 9.8
 NUCLEUS_SUBSTEPS = 15             # High substeps essential for stiff constraints
@@ -60,6 +64,25 @@ CLOTH_SELF_COLLIDE_WIDTH_SCALE = 1.5 # Padding multiplier for self-collision
 COLLIDER_THICKNESS = 0.005
 COLLIDER_FRICTION = 0.6
 COLLIDER_STICKINESS = 0.1
+
+if ISSILK:
+    CLOTH_MASS = 0.1
+    CLOTH_STRETCH_RESIST = 800.0
+    CLOTH_COMPRESSION = 20.0
+    CLOTH_BEND_RESIST = 0.05
+    CLOTH_DAMP = 0.2
+    CLOTH_FRICTION = 0.1
+
+if ISDENIM:
+    CLOTH_MASS = 1.5
+    CLOTH_STRETCH_RESIST = 1000.0
+    CLOTH_COMPRESSION = 800.0
+    CLOTH_BEND_RESIST = 15.0
+    CLOTH_DAMP = 1.0
+    CLOTH_FRICTION = 0.8
+    CLOTH_THICKNESS = 0.006
+    COLLIDE_THICKNESS = 0.006
+    COLLIDER_THICKNESS = 0.006
 
 # ======================================================================================
 # HELPER: SAFE ATTRIBUTE SETTER
@@ -484,8 +507,8 @@ def process_example(sequence_num, sequence_idx, garment, gender):
         write_ply(osp.join(out_dir, f"pred_gar_{idx}.ply"), g_v, gar_faces)
         if frame % 10 == 0:
             print(f"Frame {frame}/{len(verts_seq)}")
-        if frame == 30:
-            break
+        # if frame == 30:
+        #     break
 
     print(f"DONE: {out_dir}")
 
