@@ -17,29 +17,46 @@ from utils.interpenetration import remove_interpenetration_fast
 
 # Base Output Path
 BASE_OUT_PATH = "/mnt/d/ClothSim/Results/TailorNet/"
+AMASS_ROOT = "/mnt/d/ClothSim/AMASS/CMU/"
 
-def get_sequence_inputs(garment_class, gender, amass_sequence, amass_seq_idx):
+def get_sequence_inputs(garment_class, gender, seq_num, seq_idx):
     """Prepare sequence inputs dynamically for any AMASS sequence."""
+
+    npz_path = os.path.join(AMASS_ROOT, seq_num, f"{seq_num}_{seq_idx}_poses.npz")
+
+    # Load the data directly
+    data = np.load(npz_path, allow_pickle=True)
+    poses = data['poses'][:, 0:72] # Take first 72 params (Root + Body)
+    betas = data['betas'][:10] 
     
-    # 1. Random/Fixed Shape & Style
-    beta = get_specific_shape('somethin')
+    # --- GET GENDER ---
+    # AMASS stores gender as a string or array.
+    # Note: TailorNet models are strictly Male or Female. 
+    # If AMASS is 'female' but you run 'male' TailorNet, the shape might look odd, 
+    # but we will use the gender passed in the arguments to select the TailorNet model.
+    # amass_gender = str(data['gender']) 
+
+    # --- DOWNSAMPLE FPS ---
+    mocap_fps = data.get('mocap_framerate', 120)
+    target_fps = 30
+    step = int(round(mocap_fps / target_fps))
+    if step < 1: step = 1
+    
+    thetas = poses[::step]
+    
+    # --- PREPARE BATCH DATA ---
+    # Tile the single body shape (beta) across all frames
+    num_frames = thetas.shape[0]
+    betas = np.tile(betas[None, :], (num_frames, 1))
+    
+    # --- PREPARE STYLE (GAMMA) ---
+    # Keep using the generic style for the garment unless you want random variations
     if garment_class == 'old-t-shirt':
-        gamma = get_specific_style_old_tshirt('big_longsleeve')
+        gamma_style = get_specific_style_old_tshirt('big_longsleeve')
     else:
-        gamma = get_style('000', gender=gender, garment_class=garment_class)
-
-    # 2. Load AMASS Sequence
-    # get_any_amass_sequence_thetas should return (N, 72) pose array and fps
-    thetas, mocap_fps = get_any_amass_sequence_thetas(amass_sequence, amass_seq_idx)
-
-    # 3. FPS Downsampling (AMASS is usually 120 or 60, we want 30)
-    target_fps = 30  # match ccraft
-    subsample_step = int(round(mocap_fps / target_fps)) # usually 120 / 30 = 4
-    thetas = thetas[::subsample_step]
-
-    # 4. Tile betas/gammas to match sequence length
-    betas = np.tile(beta[None, :], [thetas.shape[0], 1])
-    gammas = np.tile(gamma[None, :], [thetas.shape[0], 1])
+        gamma_style = get_style('000', gender=gender, garment_class=garment_class)
+        
+    gammas = np.tile(gamma_style[None, :], (num_frames, 1))
     
     return thetas, betas, gammas
 
@@ -61,7 +78,7 @@ def process_example(seq_num, seq_idx, garment_class, gender):
     )
 
     # 2. Get Inputs
-    thetas, betas, gammas = get_sequence_inputs(garment_class, gender, seq_num, f"{seq_num}_{seq_idx}")
+    thetas, betas, gammas = get_sequence_inputs(garment_class, gender, seq_num, f"{seq_idx}")
 
     # load model
     tn_runner = get_tn_runner(gender=gender, garment_class=garment_class)
@@ -101,6 +118,11 @@ if __name__ == '__main__':
     sequence_indices = ["01", "02", "03", "04", "05"]
     garments = ["t-shirt", "shirt", "pant"] 
     genders = ["male"]
+
+    sequences = ["07"]
+    sequence_indices = ["01"]
+    garments = ["t-shirt"] 
+    genders = ["male"]
     
     for seq_num in sequences:
         for seq_idx in sequence_indices:
@@ -111,3 +133,4 @@ if __name__ == '__main__':
                     except Exception as e:
                         print(f"[FAILED] Batch Item {seq_num}_{seq_idx} {garment}: {e}")
                         traceback.print_exc()
+                    exit()
