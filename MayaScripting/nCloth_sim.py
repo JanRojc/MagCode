@@ -29,8 +29,8 @@ EXPORT_PAD = 4
 AUTO_PIN_TOP_RATIO = 0.02
 
 # edit based on the parameters
-ISSILK = False
-ISDENIM = True
+ISSILK = True
+ISDENIM = False
 
 # --- PHYSICS PARAMETERS (HEAVY COTTON SETTINGS) ---
 GRAVITY = 9.8
@@ -68,7 +68,7 @@ COLLIDER_STICKINESS = 0.1
 if ISSILK:
     CLOTH_MASS = 0.1
     CLOTH_STRETCH_RESIST = 800.0
-    CLOTH_COMPRESSION = 20.0
+    CLOTH_COMPRESSION_RESIST = 20.0
     CLOTH_BEND_RESIST = 0.05
     CLOTH_DAMP = 0.2
     CLOTH_FRICTION = 0.1
@@ -76,7 +76,7 @@ if ISSILK:
 if ISDENIM:
     CLOTH_MASS = 1.5
     CLOTH_STRETCH_RESIST = 1000.0
-    CLOTH_COMPRESSION = 800.0
+    CLOTH_COMPRESSION_RESIST = 800.0
     CLOTH_BEND_RESIST = 15.0
     CLOTH_DAMP = 1.0
     CLOTH_FRICTION = 0.8
@@ -512,9 +512,27 @@ def process_example(sequence_num, sequence_idx, garment, gender):
 
     print(f"DONE: {out_dir}")
 
+
+
+
 if __name__ == "__main__":
     try:
         process_example("07", "01", "t-shirt", "male")
     except Exception as e:
         import traceback
         traceback.print_exc()
+
+    # ------------------------------------------------------ #
+
+    # sequences = ["01", "02", "05", "07"]
+    # sequence_indices = ["01", "02", "03", "04", "05"]
+    # garments  = ["t-shirt", "shirt", "pant"]
+    # gender = "male"
+
+    # for seq_num in sequences:
+    #     for seq_idx in sequence_indices:
+    #         for garment in garments:
+    #             try:
+    #                 process_example(seq_num, seq_idx, garment, gender)
+    #             except Exception as e:
+    #                 print(f"[FAILED] {seq_num}_{seq_idx} {garment} {gender}: {e}")

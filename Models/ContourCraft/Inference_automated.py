@@ -10,28 +10,21 @@ import time
 import subprocess
 
 
-# Set material paramenters, see configs/contourcraft.yaml for the training ranges for each parameter
-material_dict = dict()
-material_dict['density'] = 0.20022
-material_dict['lame_mu'] = 23600.0
-material_dict['lame_lambda'] = 44400
-material_dict['bending_coeff'] = 3.962e-05
-
-
-# ====================================================================================================
 
 models_dir = Path(DEFAULTS.data_root) / 'trained_models'
 
 # Choose the model and the configuration file
 
-config_name = 'hood_cvpr'
-checkpoint_path = models_dir / 'hood_cvpr.pth'
+# config_name = 'hood_cvpr'
+# config_name = 'hood_cvpr_silk'
+# checkpoint_path = models_dir / 'hood_cvpr.pth'
 
 # config_name = 'hood_final'
 # checkpoint_path = models_dir / 'hood_final.pth'
 
-# config_name = 'contourcraft'
-# checkpoint_path = models_dir / 'contourcraft.pth'
+config_name = 'contourcraft'
+# config_name = 'contourcraft_silk'
+checkpoint_path = models_dir / 'contourcraft.pth'
 
 isHood = "hood" in config_name
 if isHood:
@@ -44,8 +37,8 @@ if isHood:
 # load the config from a .yaml file and load .py modules specified there
 modules, experiment_config = load_params(config_name)
 
-# modify the config to use it for validation 
-experiment_config = apply_material_params(experiment_config, material_dict)
+# material config will be changed in the yaml file
+# experiment_config = apply_material_params(experiment_config, material_dict)
 
 # load a Runner object and the .py module it is declared in
 runner_module, runner = load_runner_from_checkpoint(checkpoint_path, modules, experiment_config)
@@ -139,10 +132,14 @@ sequences = ["01", "02", "05", "07"]
 sequence_indices = ["01", "02", "03", "04", "05"]
 garments  = ["t-shirt", "shirt", "pant"]
 
+# sequences = ["07"]
+# sequence_indices = ["01"]
+# garments  = ["t-shirt"]
+
 for seq_num in sequences:
     for seq_idx in sequence_indices:
         for garment in garments:
             try:
-                process_example(seq_num, seq_idx, garment, "female")
+                process_example(seq_num, seq_idx, garment, "male")
             except Exception as e:
-                print(f"[FAILED] {seq_num}_{seq_idx} {garment} female: {e}")
+                print(f"[FAILED] {seq_num}_{seq_idx} {garment} male: {e}")

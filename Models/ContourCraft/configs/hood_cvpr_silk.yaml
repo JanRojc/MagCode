@@ -25,10 +25,10 @@ runner:
       bending_coeff_max: 0.0013139737991266374
       density_min: 4.34e-2
       density_max: 7e-1
-      density_override: 0.20022
-      lame_mu_override: 23600.0
-      lame_lambda_override: 44400
-      bending_coeff_override: 3.962e-05
+      density_override: 0.05
+      lame_mu_override: 20000.0
+      lame_lambda_override: 18000.0
+      bending_coeff_override: 2.0e-05
 
 dataloaders:
   inference:
@@ -61,15 +61,12 @@ criterions:
       n_rampup_iterations: 100000
     cvpr.mataug.bending_energy:
     cvpr.friction_energy:
-      # mu: 0.1
-      mu: 0.5
-      # friction_radius: 3e-2
-      friction_radius: 3e-3
+      mu: 0.1
+      friction_radius: 3e-2
 
 model:
   cvpr:
-    # collision_radius: 2e-2
-    collision_radius: 3e-2
+    collision_radius: 2e-2
     k_world_edges: 1
     use_current_obstacle_pos: True
     n_coarse_levels: 3
