@@ -419,6 +419,8 @@ def _import_frame_meshes(results_path, frame_idx, pad=4,
 
     if ROTATE_Z:
         _apply_rotation_fix(["polySurface1", "polySurface2"], rz=-90)
+    if ROTATE_Y:
+        _apply_rotation_fix(["polySurface1", "polySurface2"], rx=-90)
     return body_xform, gar_xform
 
 def _delete_nodes(nodes):
@@ -559,10 +561,11 @@ def get_next_output_mp4(base_dir, base_name="output", ext=".mp4"):
 # ---------------------------------------------------------------------
 # Example usage
 # ---------------------------------------------------------------------
-results_path = "D:/ClothSim/Results/TailorNet/"
-results_path = "D:/ClothSim/Results/Maya/07/01/male/t-shirt/"
+results_path = "D:/ClothSim/Results/TailorNet/07/01/male/t-shirt/"
+# results_path = "D:/ClothSim/Results/Maya/07/01/male/t-shirt/"
 
 ROTATE_Z = "TailorNet" in results_path
+ROTATE_Y = "TailorNet" in results_path
 imgs_path = os.path.join(results_path, "_image_renders")
 result_ply_files_path = os.path.join(results_path, "result_ply_files")
 
