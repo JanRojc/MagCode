@@ -396,7 +396,7 @@ def process_example(sequence_num, sequence_idx, garment, gender):
     poses_path = osp.join(AMASS_ROOT, "CMU", sequence_num, f"{sequence_num}_{sequence_idx}_poses.npz")
     garment_obj = osp.join(GARMENT_OBJ_DIR, f"tailornet_{garment}_{gender}_{sequence_num}.obj")
     
-    out_dir = osp.join(OUT_ROOT, "CMU", sequence_num, sequence_idx, gender, garment, "result_ply_files")
+    out_dir = osp.join(OUT_ROOT, sequence_num, sequence_idx, gender, garment, "result_ply_files")
     body_cache = osp.join(out_dir, "body_cache.npz")
     
     ensure_body_cache_npz(poses_path, gender, body_cache)

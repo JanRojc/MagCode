@@ -560,7 +560,7 @@ def get_next_output_mp4(base_dir, base_name="output", ext=".mp4"):
 # Example usage
 # ---------------------------------------------------------------------
 results_path = "D:/ClothSim/Results/TailorNet/"
-results_path = "D:/ClothSim/Results/Maya/CMU/07/01/male/t-shirt/"
+results_path = "D:/ClothSim/Results/Maya/07/01/male/t-shirt/"
 
 ROTATE_Z = "TailorNet" in results_path
 imgs_path = os.path.join(results_path, "_image_renders")
