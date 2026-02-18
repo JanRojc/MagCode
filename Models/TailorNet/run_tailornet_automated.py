@@ -129,6 +129,8 @@ if __name__ == '__main__':
         for seq_idx in sequence_indices:
             for gender in genders:
                 for garment in garments:
+                    if (garment, gender) == ("shirt", "female"): continue
+                    
                     try:
                         process_example(seq_num, seq_idx, gender, garment)
                     except Exception as e:

@@ -138,6 +138,7 @@ def process_example(sequence_num="05", sequence_idx="02", garment="t-shirt", gen
 
 model_name = "ccraft" # ccraft / hood
 cloth_type = "cotton" # cotton / silk
+gender = "male"
 
 sequences = ["01", "02", "05", "07"]
 sequence_indices = ["01", "02", "03", "04", "05"]
@@ -151,7 +152,9 @@ init_model(model_name, cloth_type)
 for seq_num in sequences:
     for seq_idx in sequence_indices:
         for garment in garments:
+            if (garment, gender) == ("shirt", "female"): continue
+
             try:
-                process_example(seq_num, seq_idx, garment, "male")
+                process_example(seq_num, seq_idx, garment, gender)
             except Exception as e:
-                print(f"[FAILED] {seq_num}_{seq_idx} {garment} male: {e}")
+                print(f"[FAILED] {seq_num}_{seq_idx} {garment} {gender}: {e}")
