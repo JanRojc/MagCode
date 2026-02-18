@@ -61,7 +61,7 @@ def get_sequence_inputs(garment_class, gender, seq_num, seq_idx):
     return thetas, betas, gammas
 
 
-def process_example(seq_num, seq_idx, garment_class, gender):
+def process_example(seq_num, seq_idx, gender, garment_class, cloth_type="cotton"):
     """Runs inference for a single combination and saves PLYs."""
     
     print(f"\n[START] Processing: {seq_num}_{seq_idx} | {gender} | {garment_class}")
@@ -74,6 +74,7 @@ def process_example(seq_num, seq_idx, garment_class, gender):
         str(seq_idx),
         gender,
         garment_class,
+        cloth_type,
         "result_ply_files"
     )
 
@@ -129,7 +130,7 @@ if __name__ == '__main__':
             for gender in genders:
                 for garment in garments:
                     try:
-                        process_example(seq_num, seq_idx, garment, gender)
+                        process_example(seq_num, seq_idx, gender, garment)
                     except Exception as e:
                         print(f"[FAILED] Batch Item {seq_num}_{seq_idx} {garment}: {e}")
                         traceback.print_exc()

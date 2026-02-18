@@ -561,8 +561,15 @@ def get_next_output_mp4(base_dir, base_name="output", ext=".mp4"):
 # ---------------------------------------------------------------------
 # Example usage
 # ---------------------------------------------------------------------
-results_path = "D:/ClothSim/Results/TailorNet/07/01/male/t-shirt/"
-# results_path = "D:/ClothSim/Results/Maya/07/01/male/t-shirt/"
+
+sequence_num = "01"
+sequence_idx = "01"
+gender = "male"
+garment = "t-shirt"
+cloth_type = "cotton"
+
+# results_path = f"D:/ClothSim/Results/TailorNet/{sequence_num}/{sequence_idx}/{gender}/{garment}/{cloth_type}/"
+results_path = f"D:/ClothSim/Results/Maya/{sequence_num}/{sequence_idx}/{gender}/{garment}/{cloth_type}/"
 
 ROTATE_Z = "TailorNet" in results_path
 ROTATE_Y = "TailorNet" in results_path

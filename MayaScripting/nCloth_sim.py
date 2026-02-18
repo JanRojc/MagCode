@@ -29,8 +29,7 @@ EXPORT_PAD = 4
 AUTO_PIN_TOP_RATIO = 0.02
 
 # edit based on the parameters
-ISSILK = True
-ISDENIM = False
+CLOTH_TYPE = "cotton"   # cotton / silk / denim
 
 # --- PHYSICS PARAMETERS (HEAVY COTTON SETTINGS) ---
 GRAVITY = 9.8
@@ -65,7 +64,7 @@ COLLIDER_THICKNESS = 0.005
 COLLIDER_FRICTION = 0.6
 COLLIDER_STICKINESS = 0.1
 
-if ISSILK:
+if CLOTH_TYPE == "silk":
     CLOTH_MASS = 0.1
     CLOTH_STRETCH_RESIST = 800.0
     CLOTH_COMPRESSION_RESIST = 20.0
@@ -73,7 +72,7 @@ if ISSILK:
     CLOTH_DAMP = 0.2
     CLOTH_FRICTION = 0.1
 
-if ISDENIM:
+if CLOTH_TYPE == "denim":
     CLOTH_MASS = 1.5
     CLOTH_STRETCH_RESIST = 1000.0
     CLOTH_COMPRESSION_RESIST = 800.0
@@ -396,7 +395,7 @@ def process_example(sequence_num, sequence_idx, garment, gender):
     poses_path = osp.join(AMASS_ROOT, "CMU", sequence_num, f"{sequence_num}_{sequence_idx}_poses.npz")
     garment_obj = osp.join(GARMENT_OBJ_DIR, f"tailornet_{garment}_{gender}_{sequence_num}.obj")
     
-    out_dir = osp.join(OUT_ROOT, sequence_num, sequence_idx, gender, garment, "result_ply_files")
+    out_dir = osp.join(OUT_ROOT, sequence_num, sequence_idx, gender, garment, CLOTH_TYPE, "result_ply_files")
     body_cache = osp.join(out_dir, "body_cache.npz")
     
     ensure_body_cache_npz(poses_path, gender, body_cache)

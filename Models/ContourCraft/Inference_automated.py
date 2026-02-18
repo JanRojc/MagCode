@@ -5,71 +5,80 @@ from utils.common import move2device
 from utils.io import pickle_dump
 from utils.defaults import DEFAULTS
 from pathlib import Path
-
-import time
-import subprocess
-
-
-
-models_dir = Path(DEFAULTS.data_root) / 'trained_models'
-
-# Choose the model and the configuration file
-
-# config_name = 'hood_cvpr'
-# config_name = 'hood_cvpr_silk'
-# checkpoint_path = models_dir / 'hood_cvpr.pth'
-
-# config_name = 'hood_final'
-# checkpoint_path = models_dir / 'hood_final.pth'
-
-config_name = 'contourcraft'
-# config_name = 'contourcraft_silk'
-checkpoint_path = models_dir / 'contourcraft.pth'
-
-isHood = "hood" in config_name
-if isHood:
-    DEFAULTS.results_dir = '/mnt/d/ClothSim/Results/hood/'
-
-
-# ====================================================================================================
-
-
-# load the config from a .yaml file and load .py modules specified there
-modules, experiment_config = load_params(config_name)
-
-# material config will be changed in the yaml file
-# experiment_config = apply_material_params(experiment_config, material_dict)
-
-# load a Runner object and the .py module it is declared in
-runner_module, runner = load_runner_from_checkpoint(checkpoint_path, modules, experiment_config)
-
-
-############################################################################################################################################
-
-
 # file with the pose sequence
 from utils.validation import create_postcvpr_one_sequence_dataloader
 
-# If True, the SMPL(-X) poses are slightly modified to avoid hand-body self-penetrations. The technique is adopted from the code of SNUG 
-separate_arms = True
+import time
+import subprocess
+import os
 
-# SMPL
-# sequence_path =  Path(DEFAULTS.CMU_root) / '01/01_01_poses.npz'
-# sequence_loader = 'cmu_npz_smpl'
-# garment_dicts_dir = Path(DEFAULTS.aux_data) / 'garment_dicts' / 'smpl' 
-# garment_name = 'hooded_tight_dress'
-# gender = 'female'
 
-# SMPL-X
-# sequence_path =  Path(DEFAULTS.CMU_root) / '08/08_05_poses.npz'
-# sequence_path = Path('examples') / 'fromanypose' / 'mesh_sequence.pkl'
-# sequence_loader = 'cmu_npz_smplx'
-# garment_dicts_dir = Path(DEFAULTS.aux_data) / 'garment_dicts' / 'smplx'
-# garment_name = "celina_002_combined"
-# gender = 'female'
+# global var
+runner = None
+
+def init_model(model_name, cloth_type):
+    models_dir = Path(DEFAULTS.data_root) / 'trained_models'
+
+    # Choose the model and the configuration file
+
+    if model_name == "hood":
+        config_name = 'hood_cvpr'
+        if cloth_type == "silk":
+            config_name = 'hood_cvpr_silk'
+        checkpoint_path = models_dir / 'hood_cvpr.pth'
+
+    # config_name = 'hood_final'
+    # checkpoint_path = models_dir / 'hood_final.pth'
+
+    if model_name == "ccraft":
+        config_name = 'contourcraft'
+        if cloth_type == "silk":
+            config_name = 'contourcraft_silk'
+        checkpoint_path = models_dir / 'contourcraft.pth'
+
+
+    if model_name == "hood":
+        DEFAULTS.results_dir = '/mnt/d/ClothSim/Results/hood/'
+
+
+    # ====================================================================================================
+
+
+    # load the config from a .yaml file and load .py modules specified there
+    modules, experiment_config = load_params(config_name)
+
+    # material config will be changed in the yaml file
+    # experiment_config = apply_material_params(experiment_config, material_dict)
+
+    # load a Runner object and the .py module it is declared in
+    global runner
+    runner_module, runner = load_runner_from_checkpoint(checkpoint_path, modules, experiment_config)
+
+
+    ############################################################################################################################################
+
+
+    # If True, the SMPL(-X) poses are slightly modified to avoid hand-body self-penetrations. The technique is adopted from the code of SNUG 
+    separate_arms = True
+
+    # SMPL
+    # sequence_path =  Path(DEFAULTS.CMU_root) / '01/01_01_poses.npz'
+    # sequence_loader = 'cmu_npz_smpl'
+    # garment_dicts_dir = Path(DEFAULTS.aux_data) / 'garment_dicts' / 'smpl' 
+    # garment_name = 'hooded_tight_dress'
+    # gender = 'female'
+
+    # SMPL-X
+    # sequence_path =  Path(DEFAULTS.CMU_root) / '08/08_05_poses.npz'
+    # sequence_path = Path('examples') / 'fromanypose' / 'mesh_sequence.pkl'
+    # sequence_loader = 'cmu_npz_smplx'
+    # garment_dicts_dir = Path(DEFAULTS.aux_data) / 'garment_dicts' / 'smplx'
+    # garment_name = "celina_002_combined"
+    # gender = 'female'
 
 
 def process_example(sequence_num="05", sequence_idx="02", garment="t-shirt", gender='female'):
+    global runner
     sequence_loader = 'cmu_npz_smpl'
     
     sequence_path =  Path(DEFAULTS.CMU_root) / f'{sequence_num}/{sequence_num}_{sequence_idx}_poses.npz'
@@ -85,7 +94,7 @@ def process_example(sequence_num="05", sequence_idx="02", garment="t-shirt", gen
     # if not Path.exists(garment_dicts_dir / (garment_name+".pkl")):
     #     garment_name = f"tailornet_{garment}_{gender}"
     
-    out_path = Path(DEFAULTS.results_dir) / f'output_{sequence_num}_{sequence_idx}_{garment}_{gender}.pkl'
+    out_path = Path(DEFAULTS.results_dir) / sequence_num / sequence_idx / gender / garment / cloth_type / "output.pkl"
     if Path.exists(out_path):
         print("[ERROR]: output file already exists. skipping:", out_path)
 
@@ -120,13 +129,15 @@ def process_example(sequence_num="05", sequence_idx="02", garment="t-shirt", gen
         "cmd.exe", "/c",
         r"C:\Users\janr\Documents\MagCode\.venv_py310\Scripts\python.exe",
         r"C:\Users\janr\Documents\MagCode\Models\ContourCraft\render_automated.py",
-        str(isHood)
+        str(model_name == "hood")
     ]
 
     subprocess.run(command, check=True)
 
 
 
+model_name = "ccraft" # ccraft / hood
+cloth_type = "cotton" # cotton / silk
 
 sequences = ["01", "02", "05", "07"]
 sequence_indices = ["01", "02", "03", "04", "05"]
@@ -136,6 +147,7 @@ garments  = ["t-shirt", "shirt", "pant"]
 # sequence_indices = ["01"]
 # garments  = ["t-shirt"]
 
+init_model(model_name, cloth_type)
 for seq_num in sequences:
     for seq_idx in sequence_indices:
         for garment in garments:
