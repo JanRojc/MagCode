@@ -64,7 +64,7 @@ def get_sequence_inputs(garment_class, gender, seq_num, seq_idx):
 def process_example(seq_num, seq_idx, gender, garment_class, cloth_type="cotton"):
     """Runs inference for a single combination and saves PLYs."""
     
-    print(f"\n[START] Processing: {seq_num}_{seq_idx} | {gender} | {garment_class}")
+    print(f"\n\n[START] Processing: {seq_num}_{seq_idx} | {gender} | {garment_class}")
     
     # construct output directory matching Maya structure
     # Structure: .../Results/TailorNet/07/01/male/t-shirt/result_ply_files
@@ -120,10 +120,10 @@ if __name__ == '__main__':
     garments = ["t-shirt", "shirt", "pant"] 
     genders = ["male"]
 
-    sequences = ["07"]
-    sequence_indices = ["01"]
-    garments = ["t-shirt"] 
-    genders = ["male"]
+    # sequences = ["05"]
+    # sequence_indices = ["01"]
+    # garments = ["t-shirt"] 
+    # genders = ["male"]
     
     for seq_num in sequences:
         for seq_idx in sequence_indices:
@@ -134,4 +134,3 @@ if __name__ == '__main__':
                     except Exception as e:
                         print(f"[FAILED] Batch Item {seq_num}_{seq_idx} {garment}: {e}")
                         traceback.print_exc()
-                    exit()
