@@ -22,13 +22,13 @@ def init_model(model_name, cloth_type):
     # Choose the model and the configuration file
 
     if model_name == "hood":
-        config_name = 'hood_cvpr'
+        config_name = 'hood_final'
         if cloth_type == "silk":
-            config_name = 'hood_cvpr_silk'
-        checkpoint_path = models_dir / 'hood_cvpr.pth'
+            config_name = 'hood_final_silk'
+        checkpoint_path = models_dir / 'hood_final.pth'
 
-    # config_name = 'hood_final'
-    # checkpoint_path = models_dir / 'hood_final.pth'
+    # config_name = 'hood_cvpr'
+    # checkpoint_path = models_dir / 'hood_cvpr.pth'
 
     if model_name == "ccraft":
         config_name = 'contourcraft'
@@ -136,7 +136,7 @@ def process_example(sequence_num="05", sequence_idx="02", garment="t-shirt", gen
 
 
 
-model_name = "ccraft" # ccraft / hood
+model_name = "hood" # ccraft / hood
 cloth_type = "cotton" # cotton / silk
 gender = "male"
 
