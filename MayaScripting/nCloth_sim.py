@@ -11,6 +11,8 @@ import tempfile
 import subprocess
 import struct
 import numpy as np
+import time
+
 
 # ======================================================================================
 # CONFIGURATION
@@ -29,7 +31,7 @@ EXPORT_PAD = 4
 AUTO_PIN_TOP_RATIO = 0.02
 
 # edit based on the parameters
-CLOTH_TYPE = "cotton"   # cotton / silk / denim
+CLOTH_TYPE = "silk"   # cotton / silk / denim
 
 # --- PHYSICS PARAMETERS (HEAVY COTTON SETTINGS) ---
 GRAVITY = 9.8
@@ -492,22 +494,30 @@ def process_example(sequence_num, sequence_idx, garment, gender):
     
     # initialize frame 0
     cmds.currentTime(0)
+    time_acc = 0
     _set_mesh_points(body_xform, verts_seq[0])
     for frame in range(len(verts_seq)):
+        start_t = time.time()
         _set_mesh_points(body_xform, verts_seq[frame])
         cmds.currentTime(frame)
         cmds.dgdirty(allPlugs=True)
         
         g_v = _get_mesh_points_numpy(garment_xform)
         b_v = _get_mesh_points_numpy(body_xform)
+        end_t = time.time()
+        time_acc += end_t - start_t
         
         idx = str(frame).zfill(EXPORT_PAD)
         write_ply(osp.join(out_dir, f"body_{idx}.ply"), b_v, faces)
         write_ply(osp.join(out_dir, f"pred_gar_{idx}.ply"), g_v, gar_faces)
         if frame % 10 == 0:
             print(f"Frame {frame}/{len(verts_seq)}")
-        # if frame == 30:
-        #     break
+        if frame == 300:
+            break
+
+    seq_len = frame
+    with open(osp.join(OUT_ROOT, "times.txt"), "a", encoding="utf-8") as f:
+        f.write(f"{garment} {gender} {sequence_num} {sequence_idx} {(end_t-start_t)/seq_len} sec/it\n")
 
     print(f"DONE: {out_dir}")
 

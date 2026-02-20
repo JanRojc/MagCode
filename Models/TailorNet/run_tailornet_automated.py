@@ -90,6 +90,9 @@ def process_example(seq_num, seq_idx, gender, garment_class, cloth_type="cotton"
         os.makedirs(out_dir)
 
     # run inference
+    seq_len = min(len(thetas), len(betas), len(gammas))
+    start_t = time.time()
+    print("Sequence length:", seq_len)
     for i, (theta, beta, gamma) in enumerate(zip(thetas, betas, gammas)):
         # normalize y-rotation to make it front facing
         theta_normalized = normalize_y_rotation(theta)
@@ -111,6 +114,9 @@ def process_example(seq_num, seq_idx, gender, garment_class, cloth_type="cotton"
         if i % 10 == 0:
             print(f"  Frame {i}/{len(thetas)}")
 
+    end_t = time.time()
+    with open(BASE_OUT_PATH + "times.txt", "a", encoding="utf-8") as f:
+        f.write(f"{garment} {gender} {seq_num} {seq_idx} {(end_t-start_t)/seq_len} sec/it\n")
     print(f"[DONE] Saved to {out_dir}")
 
 if __name__ == '__main__':
