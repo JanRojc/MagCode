@@ -18,6 +18,6 @@ DEFAULTS['config_dir'] = '/home/janr/documents/MagCode/Models/ContourCraft/confi
 
 DEFAULTS['experiment_root'] = os.path.join(DEFAULTS['data_root'], 'experiments')
 
-DEFAULTS['CMU_root'] = '/mnt/d/ClothSim/AMASS/CMU/'
+DEFAULTS['CMU_root'] = '/mnt/d/ClothSim/AMASS/CMU_SeparateArms/'
 
 DEFAULTS = munchify(DEFAULTS)

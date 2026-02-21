@@ -394,7 +394,7 @@ def ensure_body_cache_npz(poses_path, gender, out_npz):
 
 def process_example(sequence_num, sequence_idx, garment, gender):
     sequence_num, sequence_idx = str(sequence_num), str(sequence_idx)
-    poses_path = osp.join(AMASS_ROOT, "CMU", sequence_num, f"{sequence_num}_{sequence_idx}_poses.npz")
+    poses_path = osp.join(AMASS_ROOT, "CMU_SeparateArms", sequence_num, f"{sequence_num}_{sequence_idx}_poses.npz")
     garment_obj = osp.join(GARMENT_OBJ_DIR, f"tailornet_{garment}_{gender}_{sequence_num}.obj")
     
     out_dir = osp.join(OUT_ROOT, sequence_num, sequence_idx, gender, garment, CLOTH_TYPE, "result_ply_files")

@@ -18,7 +18,7 @@ from utils.interpenetration import remove_interpenetration_fast
 
 # Base Output Path
 BASE_OUT_PATH = "/mnt/d/ClothSim/Results/TailorNet/"
-AMASS_ROOT = "/mnt/d/ClothSim/AMASS/CMU/"
+AMASS_ROOT = "/mnt/d/ClothSim/AMASS/CMU_SeparateArms/"
 
 def get_sequence_inputs(garment_class, gender, seq_num, seq_idx):
     """Prepare sequence inputs dynamically for any AMASS sequence."""
@@ -127,10 +127,10 @@ if __name__ == '__main__':
     garments = ["t-shirt", "shirt", "pant"] 
     genders = ["male"]
 
-    # sequences = ["05"]
-    # sequence_indices = ["01"]
-    # garments = ["t-shirt"] 
-    # genders = ["male"]
+    sequences = ["01"]
+    sequence_indices = ["01"]
+    garments = ["t-shirt"] 
+    genders = ["male"]
     
     for seq_num in sequences:
         for seq_idx in sequence_indices:
