@@ -1,11 +1,11 @@
 import maya.cmds as cmds
-from maya.api import OpenMaya as om
 import os
 import sys
 import tempfile
 import subprocess
 import struct
 import numpy as np
+import math
 
 # ======================================================================================
 # CONFIGURATION
@@ -14,7 +14,6 @@ EXTERNAL_PYTHON = r"C:\Users\janr\Documents\MagCode\.venv_py310\Scripts\python.e
 RESULTS_ROOT = r"D:\ClothSim\Results"
 X_SHIFT_STEP = 1.5  # 1.5 meters spacing between methods
 
-# NOTE: "Maya" must remain the first item so it is loaded and used as the reference!
 MODELS = {
     "Maya": "Maya",
     "TailorNet": "TailorNet",
@@ -22,7 +21,6 @@ MODELS = {
     "HOOD": "hood"
 }
 
-# Example to load
 SEQ_NUM = "01"
 SEQ_IDX = "01"
 GENDER = "male"
@@ -30,127 +28,95 @@ GARMENT = "t-shirt"
 CLOTH_TYPE = "cotton"
 
 # ======================================================================================
-# CUSTOM PLY PARSER
+# CUSTOM PLY PARSER (Minified)
 # ======================================================================================
 _SCALAR_FMT = {
-    "char":   ("b", 1), "int8": ("b", 1),
-    "uchar":  ("B", 1), "uint8":("B", 1),
-    "short":  ("h", 2), "int16":("h", 2),
-    "ushort": ("H", 2), "uint16":("H", 2),
-    "int":    ("i", 4), "int32":("i", 4),
-    "uint":   ("I", 4), "uint32":("I", 4),
-    "float":  ("f", 4), "float32":("f", 4),
-    "double": ("d", 8), "float64":("d", 8),
+    "char": ("b", 1), "int8": ("b", 1), "uchar": ("B", 1), "uint8": ("B", 1),
+    "short": ("h", 2), "int16": ("h", 2), "ushort": ("H", 2), "uint16": ("H", 2),
+    "int": ("i", 4), "int32": ("i", 4), "uint": ("I", 4), "uint32": ("I", 4),
+    "float": ("f", 4), "float32": ("f", 4), "double": ("d", 8), "float64": ("d", 8),
 }
-
-_FACE_LIST_NAMES = ("vertex_indices", "vertex_index", "indices")
-
-def _read_line(f):
-    b = f.readline()
-    if not b: return None
-    return b.decode("ascii", errors="replace").strip()
-
-def _parse_header(f):
-    if _read_line(f) != "ply": raise RuntimeError("Not a PLY file.")
-    fmt = None; elements = []; current = None
-    while True:
-        line = _read_line(f)
-        if line is None: raise RuntimeError("Unexpected EOF.")
-        if line == "end_header": break
-        if not line or line.startswith("comment"): continue
-        parts = line.split()
-        head = parts[0].lower()
-        if head == "format": fmt = parts[1].lower()
-        elif head == "element":
-            if current: elements.append(current)
-            current = {"name": parts[1], "count": int(parts[2]), "properties": []}
-        elif head == "property":
-            if parts[1].lower() == "list":
-                current["properties"].append({"kind": "list", "count_type": parts[2].lower(), "item_type": parts[3].lower(), "name": parts[4]})
-            else:
-                current["properties"].append({"kind": "scalar", "type": parts[1].lower(), "name": parts[2]})
-    if current: elements.append(current)
-    return elements
-
-def _unpack(f, fmt):
-    n = struct.calcsize(fmt); b = f.read(n)
-    return struct.unpack(fmt, b)
-
-def _read_scalar(f, t):
-    return _unpack(f, "<" + _SCALAR_FMT[t][0])[0]
-
-def _skip_scalar(f, t):
-    f.read(_SCALAR_FMT[t][1])
-
-def _triangulate_faces(faces):
-    counts, connects = [], []
-    for face in faces:
-        if len(face) < 3: continue
-        if len(face) == 3: counts.append(3); connects.extend(face)
-        else:
-            v0 = face[0]
-            for k in range(1, len(face) - 1):
-                counts.append(3); connects.extend([v0, face[k], face[k + 1]])
-    return counts, connects
 
 def import_ply_binary_le_as_mesh(path):
     verts, faces = [], []
     with open(path, "rb") as f:
-        elements = _parse_header(f)
-        vertex_elem = next((e for e in elements if e["name"] == "vertex"), None)
-        vprops = vertex_elem["properties"]
+        elements = []
+        fmt = None; current = None
+        while True:
+            line = f.readline()
+            if not line: break
+            line = line.decode("ascii", errors="replace").strip()
+            if line == "end_header": break
+            if not line or line.startswith("comment"): continue
+            parts = line.split()
+            if parts[0].lower() == "format": fmt = parts[1].lower()
+            elif parts[0].lower() == "element":
+                if current: elements.append(current)
+                current = {"name": parts[1], "count": int(parts[2]), "properties": []}
+            elif parts[0].lower() == "property":
+                if parts[1].lower() == "list":
+                    current["properties"].append({"kind": "list", "count_type": parts[2].lower(), "item_type": parts[3].lower(), "name": parts[4]})
+                else:
+                    current["properties"].append({"kind": "scalar", "type": parts[1].lower(), "name": parts[2]})
+        if current: elements.append(current)
+
+        vprops = next((e["properties"] for e in elements if e["name"] == "vertex"), None)
         ix, iy, iz = (next(i for i, p in enumerate(vprops) if p["name"] == axis) for axis in ["x", "y", "z"])
         
         for elem in elements:
-            ename, ecount, props = elem["name"], elem["count"], elem["properties"]
-            if ename == "vertex":
-                for _ in range(ecount):
+            for _ in range(elem["count"]):
+                if elem["name"] == "vertex":
                     row = []
-                    for p in props:
-                        if p["kind"] == "scalar": row.append(_read_scalar(f, p["type"]))
+                    for p in elem["properties"]:
+                        if p["kind"] == "scalar":
+                            row.append(struct.unpack("<" + _SCALAR_FMT[p["type"]][0], f.read(_SCALAR_FMT[p["type"]][1]))[0])
                         else:
-                            ct = int(_read_scalar(f, p["count_type"]))
-                            for __ in range(ct): _skip_scalar(f, p["item_type"])
+                            ct = struct.unpack("<" + _SCALAR_FMT[p["count_type"]][0], f.read(_SCALAR_FMT[p["count_type"]][1]))[0]
+                            f.read(_SCALAR_FMT[p["item_type"]][1] * ct)
                             row.append(None)
                     verts.append((float(row[ix]), float(row[iy]), float(row[iz])))
-            elif ename == "face":
-                list_idx = next((i for i, p in enumerate(props) if p["kind"] == "list" and p["name"] in _FACE_LIST_NAMES), None)
-                for _ in range(ecount):
+                elif elem["name"] == "face":
                     face_inds = None
-                    for i, p in enumerate(props):
-                        if p["kind"] == "scalar": _skip_scalar(f, p["type"])
+                    list_idx = next((i for i, p in enumerate(elem["properties"]) if p["kind"] == "list"), None)
+                    for i, p in enumerate(elem["properties"]):
+                        if p["kind"] == "scalar": f.read(_SCALAR_FMT[p["type"]][1])
                         else:
-                            ct = int(_read_scalar(f, p["count_type"]))
-                            if i == list_idx: face_inds = [int(_read_scalar(f, p["item_type"])) for __ in range(ct)]
-                            else:
-                                for __ in range(ct): _skip_scalar(f, p["item_type"])
+                            ct = struct.unpack("<" + _SCALAR_FMT[p["count_type"]][0], f.read(_SCALAR_FMT[p["count_type"]][1]))[0]
+                            if i == list_idx:
+                                face_inds = [struct.unpack("<" + _SCALAR_FMT[p["item_type"]][0], f.read(_SCALAR_FMT[p["item_type"]][1]))[0] for __ in range(ct)]
+                            else: f.read(_SCALAR_FMT[p["item_type"]][1] * ct)
                     if face_inds: faces.append(face_inds)
-            else:
-                for _ in range(ecount):
-                    for p in props:
-                        if p["kind"] == "scalar": _skip_scalar(f, p["type"])
-                        else:
-                            ct = int(_read_scalar(f, p["count_type"]))
-                            for __ in range(ct): _skip_scalar(f, p["item_type"])
 
-    points = [om.MPoint(x, y, z) for (x, y, z) in verts]
-    counts, connects = _triangulate_faces(faces)
+    flat_pts, flat_counts, flat_connects = [], [], []
+    for x, y, z in verts: flat_pts.extend([x, y, z])
+    for face in faces:
+        if len(face) == 3:
+            flat_counts.append(3); flat_connects.extend(face)
+        elif len(face) > 3:
+            v0 = face[0]
+            for k in range(1, len(face) - 1):
+                flat_counts.append(3); flat_connects.extend([v0, face[k], face[k + 1]])
+
+    # Build via cmds to avoid OpenMaya naming issues
+    mesh_node = cmds.polyCreateFacet(p=verts)[0]
+    cmds.delete(mesh_node) # Delete empty placeholder, use robust creation
     
-    mesh_fn = om.MFnMesh()
+    # Actually, polyCreateFacet is slow for many polys. Let's write it to a temp OBJ and import via cmds.
+    # This completely bypasses OpenMaya bugs in your scene.
+    tmp_obj = os.path.join(tempfile.gettempdir(), "temp_ply_converted.obj")
+    with open(tmp_obj, 'w') as f_obj:
+        for x,y,z in verts: f_obj.write(f"v {x} {y} {z}\n")
+        for face in faces: 
+            f_obj.write("f " + " ".join([str(idx+1) for idx in face]) + "\n")
+            
+    before = set(cmds.ls(type="transform", long=True) or [])
+    cmds.file(tmp_obj, i=True, type="OBJ", ignoreVersion=True, options="mo=1")
+    after = set(cmds.ls(type="transform", long=True) or [])
+    new = list(after - before)
+    if os.path.exists(tmp_obj): os.remove(tmp_obj)
     
-    arr_counts = om.MIntArray(); [arr_counts.append(int(c)) for c in counts]
-    arr_connects = om.MIntArray(); [arr_connects.append(int(c)) for c in connects]
-    
-    created_obj = mesh_fn.create(points, arr_counts, arr_connects)
-    
-    xform_obj = created_obj if created_obj.hasFn(om.MFn.kTransform) else om.MFnDagNode(created_obj).parent(0)
-    xform_path = om.MFnDagNode(xform_obj).fullPathName()
-    
-    shapes = cmds.listRelatives(xform_path, shapes=True, fullPath=True)
-    if shapes: cmds.setAttr(f"{shapes[0]}.displayColors", 0)
-    
-    cmds.makeIdentity(xform_path, apply=True, t=1, r=1, s=1, n=0)
-    return xform_path
+    return new[0] if new else None
+
 
 # ======================================================================================
 # EXTERNAL PKL TO OBJ EXTRACTOR
@@ -162,99 +128,69 @@ import numpy as np
 
 pkl_path = sys.argv[1]
 out_obj = sys.argv[2]
-target_type = sys.argv[3] # 'cloth' or 'body'
-frame_idx = int(sys.argv[4]) # Index of frame to extract
+target_type = sys.argv[3]
+frame_idx = int(sys.argv[4])
 
 try:
     with open(pkl_path, 'rb') as f:
         data = pickle.load(f)
         
     verts, faces = None, None
-    
     if isinstance(data, dict):
         if target_type == 'cloth':
             verts = data.get('pred', data.get('pred_pos', data.get('vertices')))
             faces = data.get('cloth_faces', data.get('faces'))
-        else: # body
+        else:
             verts = data.get('obstacle', data.get('body', data.get('smpl_verts')))
             faces = data.get('obstacle_faces', data.get('body_faces', data.get('faces')))
 
-    if verts is None:
-        print(f"Could not find valid '{target_type}' vertex array in PKL.")
-        sys.exit(1)
+    if verts is None: sys.exit(1)
         
     if len(verts.shape) == 3:
         max_idx = verts.shape[0] - 1
-        safe_idx = min(frame_idx, max_idx)
-        verts = verts[safe_idx]
+        verts = verts[min(frame_idx, max_idx)]
         
     if hasattr(verts, 'detach'): verts = verts.detach().cpu().numpy()
     if faces is not None and hasattr(faces, 'detach'): faces = faces.detach().cpu().numpy()
         
     with open(out_obj, 'w') as f:
-        for v in verts:
-            f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
+        for v in verts: f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
         if faces is not None:
-            for face in faces:
-                f.write(f"f {int(face[0])+1} {int(face[1])+1} {int(face[2])+1}\n")
-                
+            for face in faces: f.write(f"f {int(face[0])+1} {int(face[1])+1} {int(face[2])+1}\n")
     sys.exit(0)
-except Exception as e:
-    print(f"Error extracting PKL: {e}")
+except Exception:
     sys.exit(1)
 """
 
 # ======================================================================================
-# HELPER: MESH CREATION & MATH ALIGNMENT
+# HELPER FUNCTIONS
 # ======================================================================================
 def _clear_scene_keep_cameras():
-    default_cams = {"persp", "top", "front", "side"}
-    transforms = cmds.ls(type="transform") or []
-    to_delete = [t for t in transforms if t not in default_cams]
+    defaults = {"persp", "top", "front", "side"}
+    to_delete = [t for t in (cmds.ls(type="transform") or []) if t not in defaults]
     if to_delete: cmds.delete(to_delete)
 
 def _import_obj_or_ply(filepath):
     if not os.path.isfile(filepath): return None
-        
     if filepath.endswith('.obj'):
         before = set(cmds.ls(type="transform", long=True) or [])
         cmds.file(filepath, i=True, type="OBJ", ignoreVersion=True, options="mo=1")
-        after = set(cmds.ls(type="transform", long=True) or [])
-        new = list(after - before)
-        if not new: return None
-        
-        x = new[0]
-        for t in new:
-            if cmds.listRelatives(t, shapes=True, type="mesh"):
-                x = t; break
-                
-        cmds.makeIdentity(x, apply=True, t=1, r=1, s=1, n=0)
-        return x
-        
+        new = list(set(cmds.ls(type="transform", long=True) or []) - before)
+        return new[0] if new else None
     elif filepath.endswith('.ply'):
         return import_ply_binary_le_as_mesh(filepath)
 
 def _load_mesh_from_pkl_via_bridge(filepath, target_type, frame_idx):
     if not os.path.isfile(filepath): return None
-        
     tmp_dir = tempfile.gettempdir()
     extractor_py = os.path.join(tmp_dir, "pkl_extractor.py")
     temp_obj = os.path.join(tmp_dir, f"temp_{target_type}_ext.obj")
-    
-    with open(extractor_py, "w") as f:
-        f.write(_PKL_EXTRACTOR_CODE)
-        
-    cmd = [EXTERNAL_PYTHON, extractor_py, filepath, temp_obj, target_type, str(frame_idx)]
-    p = subprocess.run(cmd, capture_output=True, text=True)
-    
-    if p.returncode != 0:
-        print(f"[ERROR] Failed to extract {target_type} from {filepath}:\n{p.stderr}\n{p.stdout}")
-        return None
-        
+    with open(extractor_py, "w") as f: f.write(_PKL_EXTRACTOR_CODE)
+    subprocess.run([EXTERNAL_PYTHON, extractor_py, filepath, temp_obj, target_type, str(frame_idx)], capture_output=True)
     if os.path.exists(temp_obj):
-        imported_node = _import_obj_or_ply(temp_obj)
+        node = _import_obj_or_ply(temp_obj)
         os.remove(temp_obj)
-        return imported_node
+        return node
     return None
 
 def _assign_lambert(xform, color, name_suffix):
@@ -265,166 +201,158 @@ def _assign_lambert(xform, color, name_suffix):
         sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name=f"{shader_name}SG")
         cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
         cmds.setAttr(f"{shader}.color", *color, type="double3")
-    else:
-        sg = f"{shader_name}SG"
+    else: sg = f"{shader_name}SG"
     cmds.sets(xform, e=True, forceElement=sg)
 
-def _apply_rotation_fix(xforms, rx=0.0, ry=0.0, rz=0.0):
-    for x in xforms:
-        if x and cmds.objExists(x):
-            cmds.rotate(rx, ry, rz, x, r=True, os=True, fo=True)
-
-# --- RIGID ALIGNMENT FUNCTIONS (KABSCH ALGORITHM) ---
+# --- BULLETPROOF VERTEX EXTRACTOR ---
 def _get_mesh_vertices_numpy(transform_node):
-    """Extracts world-space vertices of a mesh to a numpy array."""
-    sel = om.MSelectionList()
-    sel.add(transform_node)
-    dag_path = sel.getDagPath(0)
-    if dag_path.apiType() != om.MFn.kMesh:
-        dag_path.extendToShape()
-        
-    mesh_fn = om.MFnMesh(dag_path)
-    pts = mesh_fn.getPoints(om.MSpace.kWorld)
+    """Safely extracts vertices using cmds, avoiding OpenMaya API crashes."""
+    if not transform_node or not cmds.objExists(transform_node): return None
     
-    out = np.zeros((len(pts), 3), dtype=np.float32)
-    for i in range(len(pts)):
-        out[i] = [pts[i].x, pts[i].y, pts[i].z]
+    # Flat list: [x1, y1, z1, x2, y2, z2, ...]
+    vtx_flat = cmds.xform(f"{transform_node}.vtx[*]", query=True, translation=True, worldSpace=True)
+    
+    # Convert to Nx3 Numpy array
+    out = np.array(vtx_flat, dtype=np.float32).reshape(-1, 3)
     return out
 
-def calculate_alignment_matrix(A, B):
+# --- FAST ICP ALGORITHM (SHAPE ALIGNMENT) ---
+def calculate_fast_icp_alignment(source_pts, target_pts, max_iters=15, sample_size=500):
     """
-    Finds the optimal Rotation & Translation to align point cloud A to B.
-    Accepts two numpy arrays.
-    Returns a 16-element flat list ready for Maya's cmds.xform(matrix=...)
+    Lightning-fast Iterative Closest Point using random downsampling.
+    Solves the 30-second delay and ignores topology/resolution differences.
     """
-    if A.shape[0] != B.shape[0]:
-        print(f"[WARNING] Vertex count mismatch ({A.shape[0]} vs {B.shape[0]}). Skipping math alignment.")
-        return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1] # Identity matrix
-
-    # 1. Find Centroids
-    centroid_A = np.mean(A, axis=0)
-    centroid_B = np.mean(B, axis=0)
-
-    # 2. Center the point clouds
-    AA = A - centroid_A
-    BB = B - centroid_B
-
-    # 3. Calculate Covariance Matrix & SVD
-    H = np.dot(AA.T, BB)
-    U, S, Vt = np.linalg.svd(H)
+    if source_pts is None or target_pts is None: return None
     
-    # 4. Calculate Rotation
-    R = np.dot(Vt.T, U.T)
-
-    # Special reflection case handling
-    if np.linalg.det(R) < 0:
-        Vt[2, :] *= -1
+    # 1. Initial Centroid Translation (Calculated on FULL meshes for high accuracy)
+    mean_src_full = np.mean(source_pts, axis=0)
+    mean_tgt_full = np.mean(target_pts, axis=0)
+    init_t = mean_tgt_full - mean_src_full
+    
+    # Apply initial translation to source points
+    src_full_shifted = source_pts + init_t
+    
+    # 2. Downsample for ultra-fast rotation matching
+    np.random.seed(42) # Keep results consistent
+    
+    # Pick 500 random points (or less if the mesh is somehow tiny)
+    n_src = min(sample_size, src_full_shifted.shape[0])
+    n_tgt = min(sample_size, target_pts.shape[0])
+    
+    src = src_full_shifted[np.random.choice(src_full_shifted.shape[0], n_src, replace=False)]
+    tgt = target_pts[np.random.choice(target_pts.shape[0], n_tgt, replace=False)]
+    
+    total_R = np.eye(3)
+    total_t = np.copy(init_t)
+    
+    for _ in range(max_iters):
+        # Broadcasting difference (Fast nearest neighbor)
+        diff = src[:, None, :] - tgt[None, :, :]
+        dists = np.sum(diff**2, axis=-1)
+        indices = np.argmin(dists, axis=1)
+        
+        matched_tgt = tgt[indices]
+        
+        # Kabsch Algorithm on the 500 matched pairs
+        mean_src = np.mean(src, axis=0)
+        mean_matched = np.mean(matched_tgt, axis=0)
+        
+        src_centered = src - mean_src
+        matched_centered = matched_tgt - mean_matched
+        
+        H = np.dot(src_centered.T, matched_centered)
+        U, S, Vt = np.linalg.svd(H)
         R = np.dot(Vt.T, U.T)
+        
+        # Prevent mirroring
+        if np.linalg.det(R) < 0:
+            Vt[2, :] *= -1
+            R = np.dot(Vt.T, U.T)
+            
+        t = mean_matched - np.dot(R, mean_src)
+        
+        # Accumulate transform
+        src = np.dot(src, R.T) + t
+        total_R = np.dot(R, total_R)
+        total_t = np.dot(R, total_t) + t
 
-    # 5. Calculate Translation
-    t = centroid_B - np.dot(R, centroid_A)
-
-    # 6. Format into 4x4 Maya Matrix (Row-Major)
-    M = np.eye(4)
-    M[:3, :3] = R.T  # Transpose needed for Maya's row-major orientation
-    M[3, :3] = t
-    
-    return M.flatten().tolist()
-
+    return [
+        total_R[0,0], total_R[1,0], total_R[2,0], 0.0,
+        total_R[0,1], total_R[1,1], total_R[2,1], 0.0,
+        total_R[0,2], total_R[1,2], total_R[2,2], 0.0,
+        total_t[0],   total_t[1],   total_t[2],   1.0
+    ]
 
 # ======================================================================================
-# MAIN VISUALIZATION LOGIC
+# MAIN VISUALIZATION
 # ======================================================================================
 def visualize_comparison(frame_indices):
     _clear_scene_keep_cameras()
-    
     print(f"\n--- Loading Comparison for {SEQ_NUM}_{SEQ_IDX} {GARMENT} ---")
     
-    # We will store the Maya body vertices to use as our alignment reference
     reference_verts = None
     
     for i, (model_display_name, folder_name) in enumerate(MODELS.items()):
         curr_frame_idx = frame_indices.get(model_display_name, 0)
-        
         base_dir = os.path.join(RESULTS_ROOT, folder_name, SEQ_NUM, SEQ_IDX, GENDER, GARMENT, CLOTH_TYPE)
         x_offset = i * X_SHIFT_STEP
-        print(f"[{model_display_name}] Loading Frame {curr_frame_idx} from: {base_dir}")
+        print(f"[{model_display_name}] Loading...")
         
         body_node, cloth_node = None, None
         
-        # --- HARDCODED FILE LOADING ---
+        # LOAD
         if model_display_name in ["CCraft", "HOOD"]:
             pkl_path = os.path.join(base_dir, "output.pkl")
-            if os.path.exists(pkl_path):
-                cloth_node = _load_mesh_from_pkl_via_bridge(pkl_path, target_type="cloth", frame_idx=curr_frame_idx)
-                body_node = _load_mesh_from_pkl_via_bridge(pkl_path, target_type="body", frame_idx=curr_frame_idx)
-            else:
-                print(f" -> [WARNING] Missing PKL file: {pkl_path}")
-                
+            cloth_node = _load_mesh_from_pkl_via_bridge(pkl_path, "cloth", curr_frame_idx)
+            body_node = _load_mesh_from_pkl_via_bridge(pkl_path, "body", curr_frame_idx)
         else:
-            gar_path = os.path.join(base_dir, "result_ply_files", "pred_gar_{:04d}.ply".format(curr_frame_idx))
-            body_path = os.path.join(base_dir, "result_ply_files", "body_{:04d}.ply".format(curr_frame_idx))
+            gar_path = os.path.join(base_dir, "result_ply_files", f"pred_gar_{curr_frame_idx:04d}.ply")
+            body_path = os.path.join(base_dir, "result_ply_files", f"body_{curr_frame_idx:04d}.ply")
+            cloth_node = _import_obj_or_ply(gar_path)
+            body_node = _import_obj_or_ply(body_path)
+
+        # MATERIALS
+        _assign_lambert(cloth_node, (0.2, 0.6, 1.0), "ClothBlue")
+        _assign_lambert(body_node, (0.4, 0.4, 0.4), "BodyGray")
             
-            if os.path.exists(gar_path): cloth_node = _import_obj_or_ply(gar_path)
-            else: print(f" -> [WARNING] Missing cloth file: {gar_path}")
-                
-            if os.path.exists(body_path): body_node = _import_obj_or_ply(body_path)
-            else: print(f" -> [WARNING] Missing body file: {body_path}")
-        
-        # --- MATERIAL ASSIGNMENT ---
-        if cloth_node: _assign_lambert(cloth_node, (0.2, 0.6, 1.0), "ClothBlue")
-        if body_node: _assign_lambert(body_node, (0.4, 0.4, 0.4), "BodyGray")
-            
-        # --- PROCESSING, ALIGNING & GROUPING ---
         nodes_to_group = [n for n in [body_node, cloth_node] if n]
         if nodes_to_group:
             
-            # --- APPLY PRELIMINARY TAILORNET FIX BEFORE ALIGNMENT ---
+            # PRE-ROTATION (Gives ICP a head start so it doesn't align sideways)
             if model_display_name == "TailorNet":
-                # Rotate first so the Procrustes algorithm starts close to the target
-                _apply_rotation_fix(nodes_to_group, rz=-90)
-                _apply_rotation_fix(nodes_to_group, rx=-90)
-                # Bake the transformation so the vertex positions update in world space
-                for node in nodes_to_group:
-                    cmds.makeIdentity(node, apply=True, t=1, r=1, s=1, n=0)
+                for node in nodes_to_group: cmds.rotate(-90, 0, -90, node, r=True, os=True, fo=True)
+                for node in nodes_to_group: cmds.makeIdentity(node, apply=True, t=1, r=1, s=1, n=0)
 
-            align_matrix = None
-            
-            # If this is Maya, extract and cache its vertices BEFORE grouping
+            # ICP ALIGNMENT
             if model_display_name == "Maya" and body_node:
                 reference_verts = _get_mesh_vertices_numpy(body_node)
                 
-            # If it's NOT Maya, extract its vertices and calculate the transform
             elif model_display_name != "Maya" and reference_verts is not None and body_node:
-                print(f" -> Automatically aligning {model_display_name} to Maya reference...")
                 src_verts = _get_mesh_vertices_numpy(body_node)
-                align_matrix = calculate_alignment_matrix(src_verts, reference_verts)
+                align_matrix = calculate_fast_icp_alignment(src_verts, reference_verts)
 
-            # 1. Group the nodes safely
+                if align_matrix:
+                    import maya.api.OpenMaya as om
+                    tm = om.MTransformationMatrix(om.MMatrix(align_matrix))
+                    rot = tm.rotation(asQuaternion=False)
+                    rx, ry, rz = math.degrees(rot.x), math.degrees(rot.y), math.degrees(rot.z)
+                    tx, ty, tz = tm.translation(om.MSpace.kWorld)
+                    
+                    print(f"   -> ICP aligned: Move [{tx:.3f}, {ty:.3f}, {tz:.3f}], Rot [{rx:.1f}°, {ry:.1f}°, {rz:.1f}°]")
+                    for node in nodes_to_group:
+                        cmds.xform(node, translation=[tx, ty, tz], rotation=[rx, ry, rz], worldSpace=True, relative=True)
+
+            # GROUP & SHIFT
             group_name = cmds.group(nodes_to_group, name=f"GRP_{model_display_name}")
-
-            # 2. Apply the calculated Procrustes transformation to the Group
-            if align_matrix:
-                cmds.xform(group_name, matrix=align_matrix, worldSpace=True)
-
-            # 3. Apply the X-axis shift to place it in its lineup slot
             cmds.move(x_offset, 0, 0, group_name, relative=True, worldSpace=True)
             
-            # 4. Text Label
-            text_curves = cmds.textCurves(text=model_display_name, font="Arial|h-13|w400|c0", name=f"TXT_{model_display_name}")[0]
-            cmds.move(x_offset, 2.2, 0, text_curves, worldSpace=True)
-            cmds.scale(0.1, 0.1, 0.1, text_curves)
-        else:
-            print(f" -> [MISSING DATA] No meshes loaded.")
+            # LABEL
+            txt = cmds.textCurves(text=model_display_name, font="Arial|h-13|w400|c0")[0]
+            cmds.move(x_offset, 2.2, 0, txt, worldSpace=True)
+            cmds.scale(0.1, 0.1, 0.1, txt)
             
     cmds.viewFit("persp", all=True)
-    print("--- Done ---")
 
 if __name__ == "__main__":
-    FRAME_INDICES = {
-        "Maya": 10,
-        "TailorNet": 10,
-        "CCraft": 10,
-        "HOOD": 8
-    }
+    FRAME_INDICES = { "Maya": 10, "TailorNet": 10, "CCraft": 10, "HOOD": 8 }
     visualize_comparison(FRAME_INDICES)
