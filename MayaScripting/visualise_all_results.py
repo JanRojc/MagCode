@@ -5,6 +5,7 @@ import sys
 import tempfile
 import subprocess
 import struct
+import numpy as np
 
 # ======================================================================================
 # CONFIGURATION
@@ -13,6 +14,7 @@ EXTERNAL_PYTHON = r"C:\Users\janr\Documents\MagCode\.venv_py310\Scripts\python.e
 RESULTS_ROOT = r"D:\ClothSim\Results"
 X_SHIFT_STEP = 1.5  # 1.5 meters spacing between methods
 
+# NOTE: "Maya" must remain the first item so it is loaded and used as the reference!
 MODELS = {
     "Maya": "Maya",
     "TailorNet": "TailorNet",
@@ -181,13 +183,9 @@ try:
         print(f"Could not find valid '{target_type}' vertex array in PKL.")
         sys.exit(1)
         
-    # Extract specific frame if it's a sequence [T, V, 3]
     if len(verts.shape) == 3:
-        # Clamp frame_idx to valid range to prevent index out of bounds
         max_idx = verts.shape[0] - 1
         safe_idx = min(frame_idx, max_idx)
-        if frame_idx > max_idx:
-            print(f"Warning: Requested frame {frame_idx} exceeds sequence length {max_idx+1}. Using last frame.")
         verts = verts[safe_idx]
         
     if hasattr(verts, 'detach'): verts = verts.detach().cpu().numpy()
@@ -207,7 +205,7 @@ except Exception as e:
 """
 
 # ======================================================================================
-# HELPER: MESH CREATION, IMPORT & CENTERING
+# HELPER: MESH CREATION & MATH ALIGNMENT
 # ======================================================================================
 def _clear_scene_keep_cameras():
     default_cams = {"persp", "top", "front", "side"}
@@ -276,48 +274,76 @@ def _apply_rotation_fix(xforms, rx=0.0, ry=0.0, rz=0.0):
         if x and cmds.objExists(x):
             cmds.rotate(rx, ry, rz, x, r=True, os=True, fo=True)
 
-def _center_meshes_on_xz(body_node, cloth_node, model_name):
-    """
-    Finds the center of the body mesh and translates both body and cloth 
-    so the body is at X=0, Z=0. The Y-axis (height) is untouched.
-    """
-    if not body_node or not cmds.objExists(body_node):
-        return
-
-    shift_x = 0.0
-    shift_y = 0.0
-    shift_z = 0.0
-
-    if model_name == "TailorNet":
-        shift_y = 0.978
-        shift_z = -0.248
-    else:
-        bbox = cmds.exactWorldBoundingBox(body_node)
-        center_x = (bbox[0] + bbox[3]) / 2.0
-        center_z = (bbox[2] + bbox[5]) / 2.0
+# --- RIGID ALIGNMENT FUNCTIONS (KABSCH ALGORITHM) ---
+def _get_mesh_vertices_numpy(transform_node):
+    """Extracts world-space vertices of a mesh to a numpy array."""
+    sel = om.MSelectionList()
+    sel.add(transform_node)
+    dag_path = sel.getDagPath(0)
+    if dag_path.apiType() != om.MFn.kMesh:
+        dag_path.extendToShape()
         
-        shift_x = -center_x
-        shift_z = -center_z
+    mesh_fn = om.MFnMesh(dag_path)
+    pts = mesh_fn.getPoints(om.MSpace.kWorld)
+    
+    out = np.zeros((len(pts), 3), dtype=np.float32)
+    for i in range(len(pts)):
+        out[i] = [pts[i].x, pts[i].y, pts[i].z]
+    return out
 
-    nodes_to_move = [n for n in [body_node, cloth_node] if n and cmds.objExists(n)]
-    if nodes_to_move:
-        cmds.move(shift_x, shift_y, shift_z, *nodes_to_move, relative=True, worldSpace=True)
+def calculate_alignment_matrix(A, B):
+    """
+    Finds the optimal Rotation & Translation to align point cloud A to B.
+    Accepts two numpy arrays.
+    Returns a 16-element flat list ready for Maya's cmds.xform(matrix=...)
+    """
+    if A.shape[0] != B.shape[0]:
+        print(f"[WARNING] Vertex count mismatch ({A.shape[0]} vs {B.shape[0]}). Skipping math alignment.")
+        return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1] # Identity matrix
+
+    # 1. Find Centroids
+    centroid_A = np.mean(A, axis=0)
+    centroid_B = np.mean(B, axis=0)
+
+    # 2. Center the point clouds
+    AA = A - centroid_A
+    BB = B - centroid_B
+
+    # 3. Calculate Covariance Matrix & SVD
+    H = np.dot(AA.T, BB)
+    U, S, Vt = np.linalg.svd(H)
+    
+    # 4. Calculate Rotation
+    R = np.dot(Vt.T, U.T)
+
+    # Special reflection case handling
+    if np.linalg.det(R) < 0:
+        Vt[2, :] *= -1
+        R = np.dot(Vt.T, U.T)
+
+    # 5. Calculate Translation
+    t = centroid_B - np.dot(R, centroid_A)
+
+    # 6. Format into 4x4 Maya Matrix (Row-Major)
+    M = np.eye(4)
+    M[:3, :3] = R.T  # Transpose needed for Maya's row-major orientation
+    M[3, :3] = t
+    
+    return M.flatten().tolist()
 
 
 # ======================================================================================
 # MAIN VISUALIZATION LOGIC
 # ======================================================================================
 def visualize_comparison(frame_indices):
-    """
-    Accepts a dictionary mapping model names to the desired frame index.
-    If a model isn't in the dict, it defaults to frame 0.
-    """
     _clear_scene_keep_cameras()
     
     print(f"\n--- Loading Comparison for {SEQ_NUM}_{SEQ_IDX} {GARMENT} ---")
     
+    # We will store the Maya body vertices to use as our alignment reference
+    reference_verts = None
+    
     for i, (model_display_name, folder_name) in enumerate(MODELS.items()):
-        # Get specific frame index for this model (defaulting to 0)
         curr_frame_idx = frame_indices.get(model_display_name, 0)
         
         base_dir = os.path.join(RESULTS_ROOT, folder_name, SEQ_NUM, SEQ_IDX, GENDER, GARMENT, CLOTH_TYPE)
@@ -336,7 +362,6 @@ def visualize_comparison(frame_indices):
                 print(f" -> [WARNING] Missing PKL file: {pkl_path}")
                 
         else:
-            # Maya & TailorNet Hardcoded Paths using specific frame index
             gar_path = os.path.join(base_dir, "result_ply_files", "pred_gar_{:04d}.ply".format(curr_frame_idx))
             body_path = os.path.join(base_dir, "result_ply_files", "body_{:04d}.ply".format(curr_frame_idx))
             
@@ -347,25 +372,42 @@ def visualize_comparison(frame_indices):
             else: print(f" -> [WARNING] Missing body file: {body_path}")
         
         # --- MATERIAL ASSIGNMENT ---
-        if cloth_node:
-            _assign_lambert(cloth_node, (0.2, 0.6, 1.0), "ClothBlue")
-        if body_node:
-            _assign_lambert(body_node, (0.4, 0.4, 0.4), "BodyGray")
+        if cloth_node: _assign_lambert(cloth_node, (0.2, 0.6, 1.0), "ClothBlue")
+        if body_node: _assign_lambert(body_node, (0.4, 0.4, 0.4), "BodyGray")
             
-        # --- PROCESSING & GROUPING ---
+        # --- PROCESSING, ALIGNING & GROUPING ---
         nodes_to_group = [n for n in [body_node, cloth_node] if n]
         if nodes_to_group:
             
-            # 1. TailorNet Rotation Fix
+            # --- APPLY PRELIMINARY TAILORNET FIX BEFORE ALIGNMENT ---
             if model_display_name == "TailorNet":
+                # Rotate first so the Procrustes algorithm starts close to the target
                 _apply_rotation_fix(nodes_to_group, rz=-90)
                 _apply_rotation_fix(nodes_to_group, rx=-90)
+                # Bake the transformation so the vertex positions update in world space
+                for node in nodes_to_group:
+                    cmds.makeIdentity(node, apply=True, t=1, r=1, s=1, n=0)
 
-            # 2. Center the meshes to origin (X=0, Z=0)
-            _center_meshes_on_xz(body_node, cloth_node, model_display_name)
+            align_matrix = None
+            
+            # If this is Maya, extract and cache its vertices BEFORE grouping
+            if model_display_name == "Maya" and body_node:
+                reference_verts = _get_mesh_vertices_numpy(body_node)
+                
+            # If it's NOT Maya, extract its vertices and calculate the transform
+            elif model_display_name != "Maya" and reference_verts is not None and body_node:
+                print(f" -> Automatically aligning {model_display_name} to Maya reference...")
+                src_verts = _get_mesh_vertices_numpy(body_node)
+                align_matrix = calculate_alignment_matrix(src_verts, reference_verts)
 
-            # 3. Group and Shift to final layout slot
+            # 1. Group the nodes safely
             group_name = cmds.group(nodes_to_group, name=f"GRP_{model_display_name}")
+
+            # 2. Apply the calculated Procrustes transformation to the Group
+            if align_matrix:
+                cmds.xform(group_name, matrix=align_matrix, worldSpace=True)
+
+            # 3. Apply the X-axis shift to place it in its lineup slot
             cmds.move(x_offset, 0, 0, group_name, relative=True, worldSpace=True)
             
             # 4. Text Label
@@ -379,7 +421,6 @@ def visualize_comparison(frame_indices):
     print("--- Done ---")
 
 if __name__ == "__main__":
-    # Specify the individual frame indices you want to extract for each model
     FRAME_INDICES = {
         "Maya": 10,
         "TailorNet": 10,
