@@ -31,7 +31,7 @@ EXPORT_PAD = 4
 AUTO_PIN_TOP_RATIO = 0.02
 
 # edit based on the parameters
-CLOTH_TYPE = "silk"   # cotton / silk / denim
+CLOTH_TYPE = "cotton"   # cotton / silk / denim
 
 # --- PHYSICS PARAMETERS (HEAVY COTTON SETTINGS) ---
 GRAVITY = 9.8
@@ -469,9 +469,10 @@ def process_example(sequence_num, sequence_idx, garment, gender):
     set_attr_safe(nucleus, "startFrame", 0)
     
     # 6. Pinning
+    auto_pin_ratio = 0.10 if garment == "pant" else AUTO_PIN_TOP_RATIO
     pts = _get_mesh_points_numpy(garment_xform)
     y_vals = pts[:, 1]
-    thresh = np.min(y_vals) + (np.max(y_vals) - np.min(y_vals)) * (1.0 - AUTO_PIN_TOP_RATIO)
+    thresh = np.min(y_vals) + (np.max(y_vals) - np.min(y_vals)) * (1.0 - auto_pin_ratio)
     pinned_indices = np.where(y_vals >= thresh)[0]
     
     if len(pinned_indices) > 0:

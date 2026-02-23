@@ -354,5 +354,5 @@ def visualize_comparison(frame_indices):
     cmds.viewFit("persp", all=True)
 
 if __name__ == "__main__":
-    FRAME_INDICES = { "Maya": 10, "TailorNet": 10, "CCraft": 10, "HOOD": 8 }
-    visualize_comparison(FRAME_INDICES)
+    frame_indices = { "Maya": 10, "TailorNet": 10, "CCraft": 10, "HOOD": 8 }
+    visualize_comparison(frame_indices)

@@ -11,12 +11,12 @@ from utils.validation import create_postcvpr_one_sequence_dataloader
 # ======================================================================================
 # CONFIGURATION
 # ======================================================================================
-ORIGINAL_AMASS_ROOT = Path(DEFAULTS.CMU_root)
-MODIFIED_AMASS_ROOT = Path("/mnt/d/ClothSim/AMASS_Modified/CMU/") # Update this if needed
+ORIGINAL_AMASS_ROOT = Path("/mnt/d/ClothSim/AMASS/CMU/")
+MODIFIED_AMASS_ROOT = Path("/mnt/d/ClothSim/AMASS/CMU_SeparateArms/") # Update this if needed
 
 # Using the focused subset
-SEQUENCES = ["01"]
-SEQUENCE_INDICES = ["01"]
+SEQUENCES = ["01", "02", "05", "07"]
+SEQUENCE_INDICES = ["01", "02", "03", "04", "05"]
 GENDER = "male"
 DUMMY_GARMENT = "t-shirt" 
 

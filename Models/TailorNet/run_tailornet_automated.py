@@ -91,7 +91,7 @@ def process_example(seq_num, seq_idx, gender, garment_class, cloth_type="cotton"
         os.makedirs(out_dir)
 
     # run inference
-    seq_len = min(len(thetas), len(betas), len(gammas))
+    seq_len = min(len(thetas), len(betas), len(gammas), 300)
     start_t = time.time()
     print("Sequence length:", seq_len)
     for i, (theta, beta, gamma) in enumerate(zip(thetas, betas, gammas)):
@@ -114,6 +114,8 @@ def process_example(seq_num, seq_idx, gender, garment_class, cloth_type="cotton"
         
         if i % 10 == 0:
             print(f"  Frame {i}/{len(thetas)}")
+        if i == 300:
+            break
 
     end_t = time.time()
     with open(BASE_OUT_PATH + "times.txt", "a", encoding="utf-8") as f:
@@ -124,13 +126,13 @@ if __name__ == '__main__':
 
     sequences = ["01", "02", "05", "07"]
     sequence_indices = ["01", "02", "03", "04", "05"]
-    garments = ["t-shirt", "shirt", "pant"] 
+    garments = ["t-shirt", "shirt", "pant"]
     genders = ["male"]
 
-    sequences = ["01"]
-    sequence_indices = ["01"]
-    garments = ["t-shirt"] 
-    genders = ["male"]
+    # sequences = ["01"]
+    # sequence_indices = ["01"]
+    # garments = ["t-shirt"] 
+    # genders = ["male"]
     
     for seq_num in sequences:
         for seq_idx in sequence_indices:
