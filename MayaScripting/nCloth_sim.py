@@ -129,8 +129,35 @@ if not hasattr(np, "str"): np.str = str
 
 import torch
 import smplx
+from scipy.spatial.transform import Rotation as R
 
 DEFAULT_MOCAP_FPS = int(os.environ.get("AMASS_DEFAULT_MOCAP_FPS", "30"))
+
+def separate_arms_on_the_fly(body_pose, angle=20):
+    
+    T = body_pose.shape[0]
+    # Reshape to (T, 23 joints, 3)
+    poses_j = body_pose.reshape(T, 23, 3)
+    
+    # SMPL Joint indices: 16 is Right Shoulder, 17 is Left Shoulder
+    # In the 23-joint body_pose array (which excludes root), 
+    # these are indices 15 and 16.
+    
+    # Right arm rotation
+    rot_r = R.from_euler('z', angle, degrees=True)
+    # Left arm rotation
+    rot_l = R.from_euler('z', -angle, degrees=True)
+    
+    for t in range(T):
+        # Apply to Right Shoulder
+        curr_r = R.from_rotvec(poses_j[t, 15])
+        poses_j[t, 15] = (rot_r * curr_r).as_rotvec()
+        
+        # Apply to Left Shoulder
+        curr_l = R.from_rotvec(poses_j[t, 16])
+        poses_j[t, 16] = (rot_l * curr_l).as_rotvec()
+        
+    return poses_j.reshape(T, 69)
 
 def load_amass_raw(poses_path: str):
     if not osp.isfile(poses_path): raise FileNotFoundError(poses_path)
@@ -154,7 +181,11 @@ def load_shape(seq_dir: str, raw: dict, force_gender=None, default_gender="femal
 def parse_smpl_params(raw: dict):
     poses = np.asarray(raw["poses"], dtype=np.float32)
     global_orient = poses[:, :3]
-    body_pose = poses[:, 3:72]
+    
+    raw_body_pose = poses[:, 3:72]
+    # Rotate arms by 20 degrees out to ensure they are 'Separate'
+    body_pose = separate_arms_on_the_fly(raw_body_pose, angle=20)
+    
     trans = raw.get("trans", None)
     if trans is None: trans = np.zeros((poses.shape[0], 3), dtype=np.float32)
     trans = np.asarray(trans, dtype=np.float32)
@@ -194,7 +225,7 @@ def export_body_cache(poses_path, model_folder, out_npz, target_fps=30, force_ge
     os.makedirs(osp.dirname(out_npz), exist_ok=True)
     np.savez_compressed(out_npz, verts=verts, faces=faces, rest_verts=rest_verts, 
                         fps=int(target_fps), skip=int(skip), gender=str(gender))
-    print("Wrote:", out_npz)
+    print("Wrote A-posed cache:", out_npz)
 
 if __name__ == "__main__":
     import argparse
@@ -526,18 +557,16 @@ def process_example(sequence_num, sequence_idx, garment, gender):
 
 
 if __name__ == "__main__":
-    # try:
-    #     process_example("07", "01", "t-shirt", "male")
-    # except Exception as e:
-    #     import traceback
-    #     traceback.print_exc()
-
-    # ------------------------------------------------------ #
 
     sequences = ["01", "02", "05", "07"]
     sequence_indices = ["01", "02", "03", "04", "05"]
     garments  = ["t-shirt", "shirt", "pant"]
     gender = "male"
+
+    # sequences = ["01"]
+    # sequence_indices = ["01"]
+    # garments  = ["pant"]
+    # gender = "male"
 
     for seq_num in sequences:
         for seq_idx in sequence_indices:
