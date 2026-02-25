@@ -95,12 +95,12 @@ def save_debug_meshes(model_name, v_cloth_gt, f_cloth_gt, v_aligned, v_body_gt, 
     
     # 1. Save Maya GT (The anchor)
     trimesh.Trimesh(vertices=v_cloth_gt, faces=f_cloth_gt, process=False).export(
-        os.path.join(debug_dir, "ref_maya.obj")
+        os.path.join(debug_dir, "garment_maya.obj")
     )
     # 2. Save Aligned Prediction
     # Using f_cloth_p ensures Maya treats it as a surface, not a point cloud
     trimesh.Trimesh(vertices=v_aligned, faces=f_cloth_gt, process=False).export(
-        os.path.join(debug_dir, f"aligned_{model_name}.obj")
+        os.path.join(debug_dir, f"garment_aligned_{model_name}.obj")
     )
     # 3. Save Maya Body (Optional: to verify body-to-body overlap)
     trimesh.Trimesh(vertices=v_body_gt, faces=f_body_gt, process=False).export(
@@ -162,7 +162,8 @@ def evaluate_experiment(seq_num, seq_idx, gender, garment, garment_type):
 
             # --- DEBUG EXPORT  ---
             if SAVE_DEBUG_MESHES and frame == save_mesh_frame:
-                save_debug_meshes(model_name, v_cloth_gt, f_cloth_gt, v_aligned, v_body_gt, f_body_gt, v_body_p)
+                v_aligned_body = (v_body_p @ R.T) + t
+                save_debug_meshes(model_name, v_cloth_gt, f_cloth_gt, v_aligned, v_body_gt, f_body_gt, v_aligned_body)
 
             # --- METRICS ---
             # RMSE
@@ -198,7 +199,7 @@ if __name__ == "__main__":
     os.makedirs(OUTPUT_ROOT, exist_ok=True)
 
     SAVE_DEBUG_MESHES = True
-    save_mesh_frame = 10
+    save_mesh_frame = 5
     
     sequences = ["01", "02", "05", "07"]
     sequence_indices = ["01", "02", "03", "04", "05"]
@@ -209,8 +210,8 @@ if __name__ == "__main__":
     sequences = ["01"]
     sequence_indices = ["01"]
     gender_list = ["male"]
-    garments = ["t-shirt"]
-    garment_types = ["silk"]
+    garments = ["pant"]
+    garment_types = ["cotton"]
 
     summary_data = []
 
