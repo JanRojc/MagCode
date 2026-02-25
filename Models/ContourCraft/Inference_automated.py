@@ -96,7 +96,7 @@ def process_example(sequence_num="05", sequence_idx="02", garment="t-shirt", gen
     
     out_path = Path(DEFAULTS.results_dir) / sequence_num / sequence_idx / gender / garment / cloth_type / "output.pkl"
     if Path.exists(out_path):
-        print("[ERROR]: output file already exists. skipping:", out_path)
+        print("[WARNING]: output file already exists.", out_path)
 
     dataloader = create_postcvpr_one_sequence_dataloader(sequence_path, garment_name, sequence_loader=sequence_loader, 
                                                 obstacle_dict_file=None, gender=gender, garment_dicts_dir=garment_dicts_dir)
@@ -144,9 +144,9 @@ sequences = ["01", "02", "05", "07"]
 sequence_indices = ["01", "02", "03", "04", "05"]
 garments  = ["t-shirt", "shirt", "pant"]
 
-# sequences = ["07"]
+# sequences = ["01"]
 # sequence_indices = ["01"]
-# garments  = ["t-shirt"]
+# garments  = ["shirt"]
 
 init_model(model_name, cloth_type)
 for seq_num in sequences:
