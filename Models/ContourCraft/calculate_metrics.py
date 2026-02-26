@@ -117,7 +117,12 @@ def save_debug_meshes(model_name, v_cloth_gt, f_cloth_gt, v_aligned, v_body_gt, 
 # ======================================================================================
 def evaluate_experiment(seq_num, seq_idx, gender, garment, garment_type):
     seq_args = [seq_num, seq_idx, gender, garment, garment_type]
-    R_tailor_fix = get_rotation_matrix('z', -90) @ get_rotation_matrix('x', -90)
+    z_deg = -90
+    x_deg = -90
+    if seq_num =="01" and seq_idx != "01" and seq_idx != "04":
+        x_deg = -90
+        z_deg = 90
+    R_tailor_fix = get_rotation_matrix('z', z_deg) @ get_rotation_matrix('x', x_deg)
     
     metrics = {m: {"rmse": [], "acc_err": [], "col_rate": []} for m in MODELS.keys()}
     history_gt = []
