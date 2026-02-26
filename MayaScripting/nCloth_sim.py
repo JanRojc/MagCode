@@ -66,24 +66,29 @@ COLLIDER_THICKNESS = 0.005
 COLLIDER_FRICTION = 0.6
 COLLIDER_STICKINESS = 0.1
 
-if CLOTH_TYPE == "silk":
-    CLOTH_MASS = 0.1
-    CLOTH_STRETCH_RESIST = 800.0
-    CLOTH_COMPRESSION_RESIST = 20.0
-    CLOTH_BEND_RESIST = 0.05
-    CLOTH_DAMP = 0.2
-    CLOTH_FRICTION = 0.1
+def set_cloth_type(cloth_type):
+    global CLOTH_TYPE, CLOTH_MASS, CLOTH_STRETCH_RESIST, CLOTH_COMPRESSION_RESIST, CLOTH_BEND_RESIST, CLOTH_DAMP, CLOTH_FRICTION, CLOTH_THICKNESS, COLLIDE_THICKNESS, COLLIDER_THICKNESS
+    
+    CLOTH_TYPE = cloth_type   # cotton / silk / denim
 
-if CLOTH_TYPE == "denim":
-    CLOTH_MASS = 1.5
-    CLOTH_STRETCH_RESIST = 1000.0
-    CLOTH_COMPRESSION_RESIST = 800.0
-    CLOTH_BEND_RESIST = 15.0
-    CLOTH_DAMP = 1.0
-    CLOTH_FRICTION = 0.8
-    CLOTH_THICKNESS = 0.006
-    COLLIDE_THICKNESS = 0.006
-    COLLIDER_THICKNESS = 0.006
+    if CLOTH_TYPE == "silk":
+        CLOTH_MASS = 0.1
+        CLOTH_STRETCH_RESIST = 800.0
+        CLOTH_COMPRESSION_RESIST = 20.0
+        CLOTH_BEND_RESIST = 0.05
+        CLOTH_DAMP = 0.2
+        CLOTH_FRICTION = 0.1
+
+    if CLOTH_TYPE == "denim":
+        CLOTH_MASS = 1.5
+        CLOTH_STRETCH_RESIST = 1000.0
+        CLOTH_COMPRESSION_RESIST = 800.0
+        CLOTH_BEND_RESIST = 15.0
+        CLOTH_DAMP = 1.0
+        CLOTH_FRICTION = 0.8
+        CLOTH_THICKNESS = 0.006
+        COLLIDE_THICKNESS = 0.006
+        COLLIDER_THICKNESS = 0.006
 
 # ======================================================================================
 # HELPER: SAFE ATTRIBUTE SETTER
@@ -549,7 +554,7 @@ def process_example(sequence_num, sequence_idx, garment, gender):
 
     seq_len = frame
     with open(osp.join(OUT_ROOT, "times.txt"), "a", encoding="utf-8") as f:
-        f.write(f"{garment} {gender} {sequence_num} {sequence_idx} {(end_t-start_t)/seq_len} sec/it\n")
+        f.write(f"{garment} {gender} {sequence_num} {sequence_idx} {(time_acc)/seq_len} sec/it\n")
 
     print(f"DONE: {out_dir}")
 
@@ -558,22 +563,26 @@ def process_example(sequence_num, sequence_idx, garment, gender):
 
 if __name__ == "__main__":
 
+    cloth_types = ["cotton", "silk"]
     sequences = ["01", "02", "05", "07"]
     sequence_indices = ["01", "02", "03", "04", "05"]
     garments  = ["t-shirt", "shirt", "pant"]
     gender = "male"
 
+    # cloth_types = ["cotton", "silk"]
     # sequences = ["01"]
     # sequence_indices = ["01"]
     # garments  = ["pant"]
     # gender = "male"
 
-    for seq_num in sequences:
-        for seq_idx in sequence_indices:
-            for garment in garments:
-                if (garment, gender) == ("shirt", "female"): continue
-                
-                try:
-                    process_example(seq_num, seq_idx, garment, gender)
-                except Exception as e:
-                    print(f"[FAILED] {seq_num}_{seq_idx} {garment} {gender}: {e}")
+    for cloth_type in cloth_types:
+        set_cloth_type(cloth_type)
+        for seq_num in sequences:
+            for seq_idx in sequence_indices:
+                for garment in garments:
+                    if (garment, gender) == ("shirt", "female"): continue
+                    
+                    try:
+                        process_example(seq_num, seq_idx, garment, gender)
+                    except Exception as e:
+                        print(f"[FAILED] {seq_num}_{seq_idx} {garment} {gender}: {e}")
