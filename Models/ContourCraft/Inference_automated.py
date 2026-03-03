@@ -125,19 +125,20 @@ def process_example(sequence_num="05", sequence_idx="02", garment="t-shirt", gen
         f.write(f"{garment} {gender} {sequence_num} {sequence_idx} {(end_t-start_t)/seq_len} sec/it\n")
 
 
-    command = [
-        "cmd.exe", "/c",
-        r"C:\Users\janr\Documents\MagCode\.venv_py310\Scripts\python.exe",
-        r"C:\Users\janr\Documents\MagCode\Models\ContourCraft\render_automated.py",
-        str(model_name == "hood")
-    ]
+    if RENDER_VIDEO:
+        command = [
+            "cmd.exe", "/c",
+            r"C:\Users\janr\Documents\MagCode\.venv_py310\Scripts\python.exe",
+            r"C:\Users\janr\Documents\MagCode\Models\ContourCraft\render_automated.py",
+            str(model_name == "hood")
+        ]
+        subprocess.run(command, check=True)
 
-    subprocess.run(command, check=True)
 
 
-
-model_name = "hood" # ccraft / hood
-cloth_type = "cotton" # cotton / silk
+RENDER_VIDEO = False
+model_names = ["ccraft", "hood"]
+cloth_types = ["cotton", "silk"]
 gender = "male"
 
 sequences = ["01", "02", "05", "07"]
@@ -147,14 +148,19 @@ garments  = ["t-shirt", "shirt", "pant"]
 # sequences = ["01"]
 # sequence_indices = ["01"]
 # garments  = ["shirt"]
+# model_names = ["hood"]
+# cloth_types = ["cotton"]
 
-init_model(model_name, cloth_type)
-for seq_num in sequences:
-    for seq_idx in sequence_indices:
-        for garment in garments:
-            if (garment, gender) == ("shirt", "female"): continue
+for model_name in model_names:
+    for cloth_type in cloth_types:
+        
+        init_model(model_name, cloth_type)
+        for seq_num in sequences:
+            for seq_idx in sequence_indices:
+                for garment in garments:
+                    if (garment, gender) == ("shirt", "female"): continue
 
-            try:
-                process_example(seq_num, seq_idx, garment, gender)
-            except Exception as e:
-                print(f"[FAILED] {seq_num}_{seq_idx} {garment} {gender}: {e}")
+                    try:
+                        process_example(seq_num, seq_idx, garment, gender)
+                    except Exception as e:
+                        print(f"[FAILED] {seq_num}_{seq_idx} {garment} {gender}: {e}")
