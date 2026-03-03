@@ -89,8 +89,8 @@ def load_pkl_frame(path, target_type, frame):
     if hasattr(v, 'detach'): v = v.detach().cpu().numpy()
     return np.array(v, dtype=np.float32)
 
-def save_debug_meshes(model_name, v_cloth_gt, f_cloth_gt, v_aligned, v_body_gt, f_body_gt, v_body_p):
-    debug_dir = os.path.join(OUTPUT_ROOT, "debug_meshes")
+def save_debug_meshes(model_name,seq_num, seq_idx, garment, garment_type, v_cloth_gt, f_cloth_gt, v_aligned, v_body_gt, f_body_gt, v_body_p):
+    debug_dir = os.path.join(OUTPUT_ROOT, "debug_meshes", seq_num, seq_idx, garment, garment_type)
     os.makedirs(debug_dir, exist_ok=True)
     
     # 1. Save Maya GT (The anchor)
@@ -168,7 +168,7 @@ def evaluate_experiment(seq_num, seq_idx, gender, garment, garment_type):
             # --- DEBUG EXPORT  ---
             if SAVE_DEBUG_MESHES and frame == save_mesh_frame:
                 v_aligned_body = (v_body_p @ R.T) + t
-                save_debug_meshes(model_name, v_cloth_gt, f_cloth_gt, v_aligned, v_body_gt, f_body_gt, v_aligned_body)
+                save_debug_meshes(model_name, seq_num, seq_idx, garment, garment_type, v_cloth_gt, f_cloth_gt, v_aligned, v_body_gt, f_body_gt, v_aligned_body)
 
             # --- METRICS ---
             # RMSE
@@ -212,11 +212,11 @@ if __name__ == "__main__":
     garments = ["t-shirt", "shirt", "pant"]
     garment_types = ["cotton", "silk"]
 
-    sequences = ["01"]
-    sequence_indices = ["01"]
-    gender_list = ["male"]
-    garments = ["pant"]
-    garment_types = ["cotton"]
+    # sequences = ["01"]
+    # sequence_indices = ["01"]
+    # gender_list = ["male"]
+    # garments = ["shirt"]
+    # garment_types = ["cotton"]
 
     summary_data = []
 
@@ -225,7 +225,6 @@ if __name__ == "__main__":
             for gender in gender_list:
                 for garment in garments:
                     for garment_type in garment_types:
-                        # Logic check from user
                         if (garment, gender) == ("shirt", "female"): 
                             continue
                         
