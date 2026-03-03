@@ -27,7 +27,7 @@ def export_histograms(df, material, suffix="original"):
         melted = df.melt(value_vars=cols, var_name='Model', value_name=metric)
         melted['Model'] = melted['Model'].str.split('_').str[0]
         
-        sns.boxplot(data=melted, x='Model', y=metric, palette="husl", fliersize=3)
+        sns.boxplot(data=melted, x='Model', y=metric, palette="husl", fliersize=3, legend=False, hue='Model')
         plt.title(f"{metric.upper()} - {material.upper()} ({suffix.upper()})")
         plt.grid(axis='y', linestyle='--', alpha=0.5)
 
@@ -47,6 +47,29 @@ def get_summary(df):
 def run_analysis():
     df = pd.read_csv(CSV_PATH)
 
+    # --- TIME COMPUTATION BLOCK ---
+    print("\n" + "="*63)
+    print("TIME AVERAGES PER MODEL")
+    print("="*63)
+    plt.figure(figsize=(8, 5))
+    results_root = os.path.dirname(OUTPUT_DIR)
+    
+    for m in ["TailorNet", "ccraft", "hood"]:
+        t_path = os.path.join(results_root, m, "times.txt")
+        if os.path.exists(t_path):
+            # Read only the 5th column (index 4) containing the float time value
+            tdf = pd.read_csv(t_path, sep=r'\s+', header=None, usecols=[4], names=['time'])
+            print(f"{m:<10} {tdf['time'].mean():>8.4f} sec/it")
+            sns.histplot(tdf['time'], kde=True, label=m, alpha=0.5)
+            
+    plt.title("Time Histograms (sec/it)")
+    plt.xlabel("Seconds per iteration")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUTPUT_DIR, "histograms_time.png"))
+    plt.close()
+    # --------------------------------------
+
     # Pre-calculate Cleaned Mask (for plots only)
     # We keep all models' data for a row only if all models pass the threshold
     mask_rmse = (df[[f"{m}_rmse" for m in MODELS]] <= RMSE_LIMIT).all(axis=1)
@@ -63,16 +86,17 @@ def run_analysis():
     # --- SECTION 2: PRINTED TABLES ---
 
     # A. Global Results (Cotton Only, Includes Outliers)
-    print("\n" + "="*60)
+    print("\n" + "="*63)
     print("SECTION 1: GLOBAL RESULTS (COTTON ONLY, INCLUDES OUTLIERS)")
-    print("="*60)
+    print("="*63)
     global_cotton = df[df['material'] == 'cotton']
-    print(pd.DataFrame([get_summary(global_cotton)]).T.rename(columns={0: 'Mean Value'}))
+    s = get_summary(global_cotton)
+    print(pd.DataFrame([{met: s[f"{m}_{met}"] for met in METRICS} for m in MODELS], index=MODELS))
 
     # B. Separate Garment Types (Cotton Only, Includes Outliers)
-    print("\n" + "="*60)
+    print("\n" + "="*63)
     print("SECTION 2: GARMENT TYPE BREAKDOWN (COTTON ONLY)")
-    print("="*60)
+    print("="*63)
     garment_results = []
     for g in df['garment'].unique():
         subset = global_cotton[global_cotton['garment'] == g]
@@ -87,9 +111,9 @@ def run_analysis():
     print(gar_df[rmse_cols])
 
     # C. Separate Cloth Types (Cotton vs Silk, Includes Outliers)
-    print("\n" + "="*60)
+    print("\n" + "="*63)
     print("SECTION 3: CLOTH MATERIAL COMPARISON (ALL GARMENTS)")
-    print("="*60)
+    print("="*63)
     material_results = []
     for m_type in ["cotton", "silk"]:
         subset = df[df['material'] == m_type]
