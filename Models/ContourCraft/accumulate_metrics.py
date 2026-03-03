@@ -31,6 +31,10 @@ def export_histograms(df, material, suffix="original"):
         plt.title(f"{metric.upper()} - {material.upper()} ({suffix.upper()})")
         plt.grid(axis='y', linestyle='--', alpha=0.5)
 
+        if (material == "cotton" and suffix == "no_outliers") or (material == "silk" and suffix == "with_outliers"):
+            limits = [(0.01, 0.15), (-0.001, 0.023), (-0.25, 11)]
+            plt.ylim(limits[i])
+
     plt.tight_layout()
     filename = f"histograms_{material}_{suffix}.png"
     plt.savefig(os.path.join(OUTPUT_DIR, filename))
