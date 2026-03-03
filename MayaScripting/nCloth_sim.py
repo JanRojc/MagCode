@@ -111,6 +111,9 @@ def set_attr_safe(node, attr, value):
         except:
             pass
 
+def set_attr_fast(node, attr, value):
+    cmds.setAttr(f"{node}.{attr}", value)
+
 def safe_index(lst, idx=0):
     if lst and len(lst) > idx: return lst[idx]
     return None
@@ -270,10 +273,8 @@ def _set_mesh_points(transform: str, verts):
 def _get_mesh_points_numpy(transform: str):
     mesh_fn = _get_mfn_mesh(transform)
     pts = mesh_fn.getPoints(om.MSpace.kWorld)
-    out = np.zeros((len(pts), 3), dtype=np.float32)
-    for i in range(len(pts)):
-        out[i] = [pts[i].x, pts[i].y, pts[i].z]
-    return out
+    # Convert MPointArray to a flat list of floats then reshape
+    return np.array(pts, dtype=np.float32)[:, :3] # Slicing off the 'w' component
 
 def _create_mesh_from_verts_faces(name: str, verts, faces) -> str:
     points = [om.MPoint(float(v[0]), float(v[1]), float(v[2])) for v in verts]
@@ -340,40 +341,40 @@ def set_ncloth_uniform_mass(cloth_shape: str, cloth_mesh_xform: str, mass_value:
 
 def _configure_sim(nucleus, cloth_shape, rigid_shape, cloth_mesh_xform):    
     # === SOLVER ===
-    set_attr_safe(nucleus, "spaceScale", 1.0)
-    set_attr_safe(nucleus, "gravity", GRAVITY)
-    set_attr_safe(nucleus, "subSteps", NUCLEUS_SUBSTEPS)
-    set_attr_safe(nucleus, "maxCollisionIterations", NUCLEUS_MAX_COLLISION_ITERS)
+    set_attr_fast(nucleus, "spaceScale", 1.0)
+    set_attr_fast(nucleus, "gravity", GRAVITY)
+    set_attr_fast(nucleus, "subSteps", NUCLEUS_SUBSTEPS)
+    set_attr_fast(nucleus, "maxCollisionIterations", NUCLEUS_MAX_COLLISION_ITERS)
 
     # === CLOTH ===
     set_ncloth_uniform_mass(cloth_shape, cloth_mesh_xform, CLOTH_MASS)
     
-    set_attr_safe(cloth_shape, "stretchResistance", CLOTH_STRETCH_RESIST)
-    set_attr_safe(cloth_shape, "compressionResistance", CLOTH_COMPRESSION_RESIST)
-    set_attr_safe(cloth_shape, "shearResistance", CLOTH_SHEAR_RESIST)
+    set_attr_fast(cloth_shape, "stretchResistance", CLOTH_STRETCH_RESIST)
+    set_attr_fast(cloth_shape, "compressionResistance", CLOTH_COMPRESSION_RESIST)
+    set_attr_fast(cloth_shape, "shearResistance", CLOTH_SHEAR_RESIST)
     
     # Bending & Deform (Structure)
-    set_attr_safe(cloth_shape, "bendResistance", CLOTH_BEND_RESIST)
-    set_attr_safe(cloth_shape, "bendAngleDropoff", CLOTH_BEND_ANGLE_DROPOFF)
-    set_attr_safe(cloth_shape, "deformResistance", CLOTH_DEFORM_RESIST)
+    set_attr_fast(cloth_shape, "bendResistance", CLOTH_BEND_RESIST)
+    set_attr_fast(cloth_shape, "bendAngleDropoff", CLOTH_BEND_ANGLE_DROPOFF)
+    set_attr_fast(cloth_shape, "deformResistance", CLOTH_DEFORM_RESIST)
     
     # Friction / Damp / Drag
-    set_attr_safe(cloth_shape, "friction", CLOTH_FRICTION)
-    set_attr_safe(cloth_shape, "stickiness", CLOTH_STICKINESS)
-    set_attr_safe(cloth_shape, "damp", CLOTH_DAMP)
-    set_attr_safe(cloth_shape, "tangentialDrag", CLOTH_TANGENTIAL_DRAG)
-    set_attr_safe(cloth_shape, "drag", CLOTH_DRAG)
+    set_attr_fast(cloth_shape, "friction", CLOTH_FRICTION)
+    set_attr_fast(cloth_shape, "stickiness", CLOTH_STICKINESS)
+    set_attr_fast(cloth_shape, "damp", CLOTH_DAMP)
+    set_attr_fast(cloth_shape, "tangentialDrag", CLOTH_TANGENTIAL_DRAG)
+    set_attr_fast(cloth_shape, "drag", CLOTH_DRAG)
     
     # Collisions
-    set_attr_safe(cloth_shape, "selfCollide", 1)
-    set_attr_safe(cloth_shape, "selfCollisionFlag", 1)
-    set_attr_safe(cloth_shape, "thickness", CLOTH_THICKNESS)
-    set_attr_safe(cloth_shape, "selfCollideWidthScale", CLOTH_SELF_COLLIDE_WIDTH_SCALE)
+    set_attr_fast(cloth_shape, "selfCollide", 1)
+    set_attr_fast(cloth_shape, "selfCollisionFlag", 1)
+    set_attr_fast(cloth_shape, "thickness", CLOTH_THICKNESS)
+    set_attr_fast(cloth_shape, "selfCollideWidthScale", CLOTH_SELF_COLLIDE_WIDTH_SCALE)
     
     # === COLLIDER ===
-    set_attr_safe(rigid_shape, "thickness", COLLIDE_THICKNESS)
-    set_attr_safe(rigid_shape, "friction", COLLIDER_FRICTION)
-    set_attr_safe(rigid_shape, "stickiness", COLLIDER_STICKINESS)
+    set_attr_fast(rigid_shape, "thickness", COLLIDE_THICKNESS)
+    set_attr_fast(rigid_shape, "friction", COLLIDER_FRICTION)
+    set_attr_fast(rigid_shape, "stickiness", COLLIDER_STICKINESS)
 
 # ======================================================================================
 # LOGIC
@@ -502,7 +503,7 @@ def process_example(sequence_num, sequence_idx, garment, gender):
     
     # 5. Physics
     _configure_sim(nucleus, cloth_shape, rigid_shape, garment_xform)
-    set_attr_safe(nucleus, "startFrame", 0)
+    set_attr_fast(nucleus, "startFrame", 0)
     
     # 6. Pinning
     auto_pin_ratio = 0.10 if garment == "pant" else AUTO_PIN_TOP_RATIO
@@ -529,28 +530,35 @@ def process_example(sequence_num, sequence_idx, garment, gender):
 
     print(f"Starting Sim: {sequence_num}_{sequence_idx}...")
     
-    # initialize frame 0
-    cmds.currentTime(0)
-    time_acc = 0
-    _set_mesh_points(body_xform, verts_seq[0])
-    for frame in range(len(verts_seq)):
-        start_t = time.time()
-        _set_mesh_points(body_xform, verts_seq[frame])
-        cmds.currentTime(frame)
-        cmds.dgdirty(allPlugs=True)
-        
-        g_v = _get_mesh_points_numpy(garment_xform)
-        b_v = _get_mesh_points_numpy(body_xform)
-        end_t = time.time()
-        time_acc += end_t - start_t
-        
-        idx = str(frame).zfill(EXPORT_PAD)
-        write_ply(osp.join(out_dir, f"body_{idx}.ply"), b_v, faces)
-        write_ply(osp.join(out_dir, f"pred_gar_{idx}.ply"), g_v, gar_faces)
-        if frame % 10 == 0:
+    # --- OPTIMIZATION: SUSPEND VIEWPORT ---
+    cmds.refresh(suspend=True)
+    
+    try:
+        # initialize frame 0
+        cmds.currentTime(0)
+        time_acc = 0
+        _set_mesh_points(body_xform, verts_seq[0])
+        for frame in range(len(verts_seq)):
+            start_t = time.time()
+            _set_mesh_points(body_xform, verts_seq[frame])
+            cmds.currentTime(frame)
+            cmds.dgdirty(allPlugs=True)
+            
+            g_v = _get_mesh_points_numpy(garment_xform)
+            b_v = _get_mesh_points_numpy(body_xform)
+            end_t = time.time()
+            time_acc += end_t - start_t
+            
+            idx = str(frame).zfill(EXPORT_PAD)
+            write_ply(osp.join(out_dir, f"body_{idx}.ply"), b_v, faces)
+            write_ply(osp.join(out_dir, f"pred_gar_{idx}.ply"), g_v, gar_faces)
+            # if frame % 10 == 0:
             print(f"Frame {frame}/{len(verts_seq)}")
-        if frame == 300:
-            break
+            if frame == 150:
+                break
+    finally:
+        # --- OPTIMIZATION: RESTORE VIEWPORT ---
+        cmds.refresh(suspend=False)
 
     seq_len = frame
     with open(osp.join(OUT_ROOT, "times.txt"), "a", encoding="utf-8") as f:
