@@ -1,5 +1,6 @@
 # virtual environment
-.venv*
+venv*
+tailornet_venv
 
 # data
 Data
@@ -10,6 +11,10 @@ test.py
 
 # random
 RandomRepos
+CCCollisions
+cuda-samples
+psbody
+pytorch3d
 
 
 

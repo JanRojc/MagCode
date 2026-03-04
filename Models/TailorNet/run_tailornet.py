@@ -11,11 +11,11 @@ from visualization.blender_renderer import visualize_garment_body
 
 from dataset.canonical_pose_dataset import get_style, get_shape
 from visualization.vis_utils import get_specific_pose, get_specific_style_old_tshirt
-from visualization.vis_utils import get_specific_shape, get_amass_sequence_thetas
+from visualization.vis_utils import get_specific_shape, get_saved_amass_sequence_thetas, get_any_amass_sequence_thetas
 from utils.interpenetration import remove_interpenetration_fast
 
 # Set output path where inference results will be stored
-OUT_PATH = "/BS/cpatel/work/code_test2"
+OUT_PATH = "/mnt/d/ClothSim/Results/TailorNet/result_ply_files/"
 
 
 def get_single_frame_inputs(garment_class, gender):
@@ -55,7 +55,7 @@ def get_single_frame_inputs(garment_class, gender):
     return thetas, betas, gammas
 
 
-def get_sequence_inputs(garment_class, gender):
+def get_sequence_inputs(garment_class, gender, amass_sequence="05", amass_seq_num="01"):
     """Prepare sequence inputs."""
     beta = get_specific_shape('somethin')
     if garment_class == 'old-t-shirt':
@@ -64,7 +64,19 @@ def get_sequence_inputs(garment_class, gender):
         gamma = get_style('000', gender=gender, garment_class=garment_class)
 
     # downsample sequence frames by 2
-    thetas = get_amass_sequence_thetas('05_02')[::2]
+    # thetas = get_saved_amass_sequence_thetas('05_02')[::2]
+    # thetas, _ = get_any_amass_sequence_thetas("05", "05_02")[1000:2000:10]
+    thetas, mocap_fps = get_any_amass_sequence_thetas(amass_sequence, amass_seq_num)
+    
+    target_fps = 30  # match ccraft
+    subsample_step = int(round(mocap_fps / target_fps)) # usually 120 / 30 = 4
+    thetas = thetas[::subsample_step]
+
+
+    # thetas = get_saved_amass_sequence_thetas('05_02')[:2]
+    # thetas[:, :3] = 0
+    # thetas = get_any_amass_sequence_thetas("05", "05_02")[:]
+
 
     betas = np.tile(beta[None, :], [thetas.shape[0], 1])
     gammas = np.tile(gamma[None, :], [thetas.shape[0], 1])
@@ -73,10 +85,10 @@ def get_sequence_inputs(garment_class, gender):
 
 def run_tailornet():
     gender = 'female'
-    garment_class = 'skirt'
+    garment_class = 't-shirt'
     # thetas, betas, gammas = get_single_frame_inputs(garment_class, gender)
-    # # uncomment the line below to run inference on sequence data
-    thetas, betas, gammas = get_sequence_inputs(garment_class, gender)
+    # uncomment the line below to run inference on sequence data
+    thetas, betas, gammas = get_sequence_inputs(garment_class, gender, "05", "05_02")
 
     # load model
     tn_runner = get_tn_runner(gender=gender, garment_class=garment_class)
@@ -93,6 +105,7 @@ def run_tailornet():
         print(i, len(thetas))
         # normalize y-rotation to make it front facing
         theta_normalized = normalize_y_rotation(theta)
+        # theta_normalized = theta
         with torch.no_grad():
             pred_verts_d = tn_runner.forward(
                 thetas=torch.from_numpy(theta_normalized[None, :].astype(np.float32)).cuda(),
@@ -101,7 +114,7 @@ def run_tailornet():
             )[0].cpu().numpy()
 
         # get garment from predicted displacements
-        body, pred_gar = smpl.run(beta=beta, theta=theta, garment_class=garment_class, garment_d=pred_verts_d)
+        body, pred_gar = smpl.run(beta=beta, theta=theta_normalized, garment_class=garment_class, garment_d=pred_verts_d)
         pred_gar = remove_interpenetration_fast(pred_gar, body)
 
         # save body and predicted garment

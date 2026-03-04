@@ -7,14 +7,6 @@ import torch.nn.functional as F
 import numpy as np
 from global_var import ROOT
 
-if not hasattr(np, "float"):
-    np.float = float
-if not hasattr(np, "int"):
-    np.int = int
-if not hasattr(np, "bool"):
-    np.bool = bool
-
-
 def batch_rodrigues(theta):
     # theta N x 3
     l1norm = torch.norm(theta + 1e-8, p=2, dim=1)
@@ -113,8 +105,8 @@ class TorchSMPL4Garment(nn.Module):
 
         # with open(model_path, 'rb') as reader:
         #     model = pickle.load(reader, encoding='iso-8859-1')
-        model = np.load(os.path.join(ROOT, 'smpl/smpl_hres_{}.npz'.format(gender)))
-        with open(os.path.join(ROOT, 'dataset_meta', 'garment_class_info.pkl'), 'rb') as f:
+        model = np.load(os.path.join(ROOT, '../../smpl/smpl_hres_{}.npz'.format(gender)))
+        with open(os.path.join(ROOT, 'garment_class_info.pkl'), 'rb') as f:
             class_info = pickle.load(f, encoding='latin-1')
         for k in class_info.keys():
             if isinstance(class_info[k]['vert_indices'], np.ndarray):
@@ -162,16 +154,11 @@ class TorchSMPL4Garment(nn.Module):
         self.cur_device = None
         self.num_verts = 27554
 
-        # skirt_weight: n_skirt, n_body
-        skirt_weight_path = os.path.join(ROOT, 'skirt_weight.npz')
-        if os.path.exists(skirt_weight_path):
-            skirt_weight = np.load()['w']
-            self.register_buffer('skirt_weight', torch.from_numpy(skirt_weight).float())
-            skirt_skinning = skirt_weight @ np_weights
-            self.register_buffer('skirt_skinning', torch.from_numpy(skirt_skinning[None]).float())
-        else:
-            self.skirt_weight = None
-            self.skirt_skinning = None
+        # # skirt_weight: n_skirt, n_body
+        # skirt_weight = np.load(os.path.join(ROOT, 'skirt_weight.npz'))['w']
+        # self.register_buffer('skirt_weight', torch.from_numpy(skirt_weight).float())
+        # skirt_skinning = skirt_weight @ np_weights
+        # self.register_buffer('skirt_skinning', torch.from_numpy(skirt_skinning[None]).float())
 
     def save_obj(self, verts, obj_mesh_name):
         if self.faces is None:
@@ -354,7 +341,7 @@ class SMPL_Lres(nn.Module):
 
         # with open(model_path, 'rb') as reader:
         #     model = pickle.load(reader, encoding='iso-8859-1')
-        model = np.load(os.path.join(ROOT, 'smpl/smpl_{}.npz'.format(gender)))
+        model = np.load(os.path.join(ROOT, '../../smpl/smpl_{}.npz'.format(gender)))
         if sys.version_info.major == 3:
             with open(os.path.join(ROOT, 'garment_class_info.pkl'), 'rb') as f:
                 class_info = pickle.load(f, encoding='latin-1')

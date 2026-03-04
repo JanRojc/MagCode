@@ -1,0 +1,166 @@
+from utils.validation import apply_material_params
+from utils.validation import load_runner_from_checkpoint
+from utils.arguments import load_params
+from utils.common import move2device
+from utils.io import pickle_dump
+from utils.defaults import DEFAULTS
+from pathlib import Path
+# file with the pose sequence
+from utils.validation import create_postcvpr_one_sequence_dataloader
+
+import time
+import subprocess
+import os
+
+
+# global var
+runner = None
+
+def init_model(model_name, cloth_type):
+    models_dir = Path(DEFAULTS.data_root) / 'trained_models'
+
+    # Choose the model and the configuration file
+
+    if model_name == "hood":
+        config_name = 'hood_final'
+        if cloth_type == "silk":
+            config_name = 'hood_final_silk'
+        checkpoint_path = models_dir / 'hood_final.pth'
+
+    # config_name = 'hood_cvpr'
+    # checkpoint_path = models_dir / 'hood_cvpr.pth'
+
+    if model_name == "ccraft":
+        config_name = 'contourcraft'
+        if cloth_type == "silk":
+            config_name = 'contourcraft_silk'
+        checkpoint_path = models_dir / 'contourcraft.pth'
+
+
+    if model_name == "hood":
+        DEFAULTS.results_dir = '/mnt/d/ClothSim/Results/hood/'
+
+
+    # ====================================================================================================
+
+
+    # load the config from a .yaml file and load .py modules specified there
+    modules, experiment_config = load_params(config_name)
+
+    # material config will be changed in the yaml file
+    # experiment_config = apply_material_params(experiment_config, material_dict)
+
+    # load a Runner object and the .py module it is declared in
+    global runner
+    runner_module, runner = load_runner_from_checkpoint(checkpoint_path, modules, experiment_config)
+
+
+    ############################################################################################################################################
+
+
+    # If True, the SMPL(-X) poses are slightly modified to avoid hand-body self-penetrations. The technique is adopted from the code of SNUG 
+    separate_arms = True
+
+    # SMPL
+    # sequence_path =  Path(DEFAULTS.CMU_root) / '01/01_01_poses.npz'
+    # sequence_loader = 'cmu_npz_smpl'
+    # garment_dicts_dir = Path(DEFAULTS.aux_data) / 'garment_dicts' / 'smpl' 
+    # garment_name = 'hooded_tight_dress'
+    # gender = 'female'
+
+    # SMPL-X
+    # sequence_path =  Path(DEFAULTS.CMU_root) / '08/08_05_poses.npz'
+    # sequence_path = Path('examples') / 'fromanypose' / 'mesh_sequence.pkl'
+    # sequence_loader = 'cmu_npz_smplx'
+    # garment_dicts_dir = Path(DEFAULTS.aux_data) / 'garment_dicts' / 'smplx'
+    # garment_name = "celina_002_combined"
+    # gender = 'female'
+
+
+def process_example(sequence_num="05", sequence_idx="02", garment="t-shirt", gender='female'):
+    global runner
+    sequence_loader = 'cmu_npz_smpl'
+    
+    sequence_path =  Path(DEFAULTS.CMU_root) / f'{sequence_num}/{sequence_num}_{sequence_idx}_poses.npz'
+    if not Path.exists(sequence_path):
+        return
+
+    # ccraft garment
+    garment_dicts_dir = Path(DEFAULTS.aux_data) / 'garment_dicts' / 'smpl'
+    # garment_name = "aaron_009__top"
+    # gender = 'male'
+
+    garment_name = f"tailornet_{garment}_{gender}_{sequence_num}"
+    # if not Path.exists(garment_dicts_dir / (garment_name+".pkl")):
+    #     garment_name = f"tailornet_{garment}_{gender}"
+    
+    out_path = Path(DEFAULTS.results_dir) / sequence_num / sequence_idx / gender / garment / cloth_type / "output.pkl"
+    if Path.exists(out_path):
+        print("[WARNING]: output file already exists.", out_path)
+
+    dataloader = create_postcvpr_one_sequence_dataloader(sequence_path, garment_name, sequence_loader=sequence_loader, 
+                                                obstacle_dict_file=None, gender=gender, garment_dicts_dir=garment_dicts_dir)
+
+
+    ############################################################################################################################################
+
+
+    start_t = time.time()
+    sequence = next(iter(dataloader))
+    sequence = move2device(sequence, 'cuda:0')
+    trajectories_dict = runner.valid_rollout(sequence,  bare=True, n_steps=500)
+    end_t = time.time()
+
+
+    ############################################################################################################################################
+
+
+    # Save the sequence to disk
+    print(f"Rollout saved into {out_path}")
+    pickle_dump(dict(trajectories_dict), out_path)
+
+    seq_len = sequence['cloth'].lookup.shape[1]
+    print("Sequence length:", seq_len)
+    with open(Path(DEFAULTS.results_dir) / "times.txt", "a", encoding="utf-8") as f:
+        f.write(f"{garment} {gender} {sequence_num} {sequence_idx} {(end_t-start_t)/seq_len} sec/it\n")
+
+
+    if RENDER_VIDEO:
+        command = [
+            "cmd.exe", "/c",
+            r"C:\Users\janr\Documents\MagCode\.venv_py310\Scripts\python.exe",
+            r"C:\Users\janr\Documents\MagCode\Models\ContourCraft\render_automated.py",
+            str(model_name == "hood")
+        ]
+        subprocess.run(command, check=True)
+
+
+
+RENDER_VIDEO = False
+model_names = ["ccraft", "hood"]
+cloth_types = ["cotton", "silk"]
+gender = "male"
+
+sequences = ["01", "02", "05", "07"]
+sequence_indices = ["01", "02", "03", "04", "05"]
+garments  = ["t-shirt", "shirt", "pant"]
+
+# sequences = ["01"]
+# sequence_indices = ["01"]
+# garments  = ["shirt"]
+# model_names = ["hood"]
+# cloth_types = ["cotton"]
+
+for model_name in model_names:
+    for cloth_type in cloth_types:
+        
+        init_model(model_name, cloth_type)
+        for seq_num in sequences:
+            for seq_idx in sequence_indices:
+                for garment in garments:
+                    if (garment, gender) == ("shirt", "female"): continue
+
+                    try:
+                        process_example(seq_num, seq_idx, garment, gender)
+                    except Exception as e:
+                        print(f"[FAILED] {seq_num}_{seq_idx} {garment} {gender}: {e}")

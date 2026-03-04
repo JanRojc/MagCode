@@ -7,6 +7,7 @@ from torch_geometric.nn import MessagePassing
 
 class BaseBlock(MessagePassing):
     def __init__(self, edge_processor_dict, node_processor_dict):
+        # We don't use the Inspector API at all – keep this simple.
         super().__init__(aggr='add')
 
         edge_processor_dict = {k: v() for k, v in edge_processor_dict.items()}
@@ -15,20 +16,17 @@ class BaseBlock(MessagePassing):
         node_processor_dict = {k: v() for k, v in node_processor_dict.items()}
         self.node_processor_dict = nn.ModuleDict(node_processor_dict)
 
-        # fix
-        # self.inspector.inspect(self.message)
-
-        # self.__user_args__ = self.inspector.keys(
-        #     ['message', 'aggregate', 'update']).difference(
-        #     self.special_args)
-
-        self.__user_args__ = set(['target_features_i', 'source_features_j'])
-
     def forward(self, sample):
         sample = self.propagate(sample)
         return sample
 
     def message(self, edge_processor_key, target_features_i=None, source_features_j=None, edge_features=None):
+        """
+        All three inputs here are already per-edge:
+        - source_features: [E, F_src]
+        - target_features: [E, F_tgt]
+        - edge_features:   [E, F_edge]
+        """
         in_features = []
         for features in [target_features_i, source_features_j, edge_features]:
             if features is not None:
@@ -41,55 +39,50 @@ class BaseBlock(MessagePassing):
         return out_features
 
     def aggregate_nodes(self, edge_features, edge_index, size, **kwargs):
-        # user_args = self.inspector.keys(['aggregate']).difference(self.special_args)
-        # coll_dict = self._collect(user_args, edge_index,
-        #                              size, kwargs)
-        # aggr_kwargs = self.inspector.distribute('aggregate', coll_dict)
-        # node_features = self.aggregate(edge_features, **aggr_kwargs)
-        # return node_features
+        """
+        Simple manual aggregation: aggregate messages to target nodes.
+        edge_features: [E, F]
+        edge_index: [2, E] (source, target)
+        size: (N_source, N_target)
+        """
+        _, num_target = size
+        device = edge_features.device
+        E, F = edge_features.shape
 
-        user_args = set()
-        coll_dict = self._collect(user_args, edge_index,
-                                     size, kwargs)
-        aggr_kwargs = {
-            'index': coll_dict.get('index'),
-            'dim_size': coll_dict.get('dim_size')
-        }
+        # Aggregate into target nodes (standard message-passing semantics).
+        tgt_idx = edge_index[1]
 
-        aggr_kwargs = {k: v for k, v in aggr_kwargs.items() if v is not None}
-        node_features = self.aggregate(edge_features, **aggr_kwargs)
-        return node_features
+        out = torch.zeros(num_target, F, device=device, dtype=edge_features.dtype)
+        out.index_add_(0, tgt_idx, edge_features)
+
+        return out
 
     def update_edge_features(self, sample, edge_processor_key, source_key, edge_key, target_key):
+        """
+        Convert node features -> per-edge features using edge_index,
+        then call message().
+        """
 
         mesh_edges = sample[source_key, edge_key, target_key]
         source = sample[source_key]
         target = sample[target_key]
 
-        edge_index = mesh_edges.edge_index
+        edge_index = mesh_edges.edge_index  # [2, E]
+        # PyG convention: edge_index[0] = source, edge_index[1] = target
+        src_idx = edge_index[0]
+        dst_idx = edge_index[1]
 
+        # Make them per-edge by indexing with edge_index
+        source_features = source.node_features[src_idx]   # [E, F_src]
+        target_features = target.node_features[dst_idx]   # [E, F_tgt]
+        edge_features = mesh_edges.features               # [E, F_edge]
 
-        source_features = source.node_features
-        target_features = target.node_features
-        N_source = source_features.shape[0]
-        N_target = target_features.shape[0]
-        size = (N_source, N_target)
-        size = self._check_input(edge_index, size)
-        coll_dict = self._collect(self.__user_args__, edge_index,
-                                     size, dict(source_features=source_features,
-                                                target_features=target_features))
-        coll_dict['edge_features'] = mesh_edges.features
-        coll_dict['edge_processor_key'] = edge_processor_key
-        # msg_kwargs = self.inspector.distribute('message', coll_dict)
-        # out = self.message(**msg_kwargs)
-        out = self.message(
-            edge_processor_key=coll_dict.get('edge_processor_key'),
-            target_features_i=coll_dict.get('target_features_i'),
-            source_features_j=coll_dict.get('source_features_j'),
-            edge_features=coll_dict.get('edge_features')
+        return self.message(
+            edge_processor_key=edge_processor_key,
+            target_features_i=target_features,
+            source_features_j=source_features,
+            edge_features=edge_features,
         )
-
-        return out
 
     def update(self, features_list, node_processor_key):
         input_features = torch.cat(features_list, dim=1)

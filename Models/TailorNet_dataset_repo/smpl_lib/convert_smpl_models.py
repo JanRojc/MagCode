@@ -6,9 +6,6 @@ import numpy as np
 import pickle as pkl
 from smpl_lib.smpl_paths import SmplPaths
 import global_var
-import sys
-sys.path.append("/Users/jan.rojc/Documents/MagCode/RandomRepos/TailorNet_dataset_repo")
-
 
 
 def proc_data(k, v):

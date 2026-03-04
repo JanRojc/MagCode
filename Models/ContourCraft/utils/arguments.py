@@ -2,7 +2,7 @@ from copy import deepcopy
 import importlib
 import os
 import typing
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -44,9 +44,9 @@ class MainConfig:
     config: Optional[str] = None           # name of the config file relative to $DEFAULTS.project_dir/configs (without .yaml)
 
     device: str = 'cuda:0'                 # device to use
-    dataloader: DataConfig = field(default_factory=DataConfig)
-    experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
-    restart: RestartConfig = field(default_factory=RestartConfig)
+    dataloader: DataConfig = DataConfig()
+    experiment: ExperimentConfig = ExperimentConfig()
+    restart: RestartConfig = RestartConfig()
     detect_anomaly: bool = False           # torch.autograd.detect_anomaly
     step_start: int = 0                    
 
@@ -126,7 +126,7 @@ def load_params(config_name: str=None, config_dir: str=None):
 
     # Set default config directory
     if config_dir is None:
-        config_dir = Path(DEFAULTS.config_dir)
+        config_dir = Path(DEFAULTS.project_dir) / 'configs'
 
     # Load default config from MainConfig and merge in cli parameters
     conf = OmegaConf.structured(MainConfig)
