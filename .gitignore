@@ -18,6 +18,42 @@ psbody
 pytorch3d
 
 
+#####################
+# Porting To Mobile #
+#####################
+# Android build/cache
+Android/HoodOnnxTest/.gradle/
+Android/HoodOnnxTest/build/
+Android/HoodOnnxTest/app/build/
+Android/DebugOutput/
+
+# Android ONNX assets (can regenerate locally)
+Android/HoodOnnxTest/app/src/main/assets/models/
+Android/HoodOnnxTest/app/src/main/assets/models_embedded/
+Android/HoodOnnxTest/app/src/main/assets/pipeline/
+Android/HoodOnnxTest/app/src/main/assets/probes/*.onnx
+Android/HoodOnnxTest/app/src/main/assets/probes/*_input*.bin
+Android/HoodOnnxTest/app/src/main/assets/probes/*_shape.json
+Android/HoodOnnxTest/app/src/main/assets/golden/
+Android/HoodOnnxTest/app/src/main/assets/*.onnx
+Android/HoodOnnxTest/app/src/main/assets/*.bin
+Android/HoodOnnxTest/app/src/main/assets/*_shape.json
+Android/HoodOnnxTest/app/src/main/assets/output*
+Android/HoodOnnxTest/local.properties
+Android/HoodOnnxTest/.idea/
+
+# Generated ONNX models / reports
+Models/ContourCraft/tools/onnx_out_*/
+Models/ContourCraft/tools/onnx_ops_report*.json
+Models/ContourCraft/tools/golden/
+
+# Unity noise
+# Unity/**/Library/
+# Unity/**/Temp/
+# Unity/**/Logs/
+# Unity/**/Obj/
+# Unity/**/UserSettings/
+Unity/
 
 
 # python

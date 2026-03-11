@@ -1,0 +1,514 @@
+[
+  {
+    "name": "blocks/block_0_0_edge_coarse_edge0.onnx",
+    "model": "models/blocks/block_0_0_edge_coarse_edge0.onnx",
+    "input_bin": "golden/blocks/block_0_0_edge_coarse_edge0.input.bin",
+    "output_bin": "golden/blocks/block_0_0_edge_coarse_edge0.output.bin",
+    "input_shape": "golden/blocks/block_0_0_edge_coarse_edge0.input_shape.json",
+    "output_shape": "golden/blocks/block_0_0_edge_coarse_edge0.output_shape.json"
+  },
+  {
+    "name": "blocks/block_0_0_edge_mesh_edge.onnx",
+    "model": "models/blocks/block_0_0_edge_mesh_edge.onnx",
+    "input_bin": "golden/blocks/block_0_0_edge_mesh_edge.input.bin",
+    "output_bin": "golden/blocks/block_0_0_edge_mesh_edge.output.bin",
+    "input_shape": "golden/blocks/block_0_0_edge_mesh_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_0_0_edge_mesh_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_0_0_edge_world_edge.onnx",
+    "model": "models/blocks/block_0_0_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_0_0_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_0_0_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_0_0_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_0_0_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_0_0_node.onnx",
+    "model": "models/blocks/block_0_0_node.onnx",
+    "input_bin": "golden/blocks/block_0_0_node.input.bin",
+    "output_bin": "golden/blocks/block_0_0_node.output.bin",
+    "input_shape": "golden/blocks/block_0_0_node.input_shape.json",
+    "output_shape": "golden/blocks/block_0_0_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_0_1_edge_coarse_edge0.onnx",
+    "model": "models/blocks/block_0_1_edge_coarse_edge0.onnx",
+    "input_bin": "golden/blocks/block_0_1_edge_coarse_edge0.input.bin",
+    "output_bin": "golden/blocks/block_0_1_edge_coarse_edge0.output.bin",
+    "input_shape": "golden/blocks/block_0_1_edge_coarse_edge0.input_shape.json",
+    "output_shape": "golden/blocks/block_0_1_edge_coarse_edge0.output_shape.json"
+  },
+  {
+    "name": "blocks/block_0_1_edge_mesh_edge.onnx",
+    "model": "models/blocks/block_0_1_edge_mesh_edge.onnx",
+    "input_bin": "golden/blocks/block_0_1_edge_mesh_edge.input.bin",
+    "output_bin": "golden/blocks/block_0_1_edge_mesh_edge.output.bin",
+    "input_shape": "golden/blocks/block_0_1_edge_mesh_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_0_1_edge_mesh_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_0_1_edge_world_edge.onnx",
+    "model": "models/blocks/block_0_1_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_0_1_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_0_1_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_0_1_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_0_1_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_0_1_node.onnx",
+    "model": "models/blocks/block_0_1_node.onnx",
+    "input_bin": "golden/blocks/block_0_1_node.input.bin",
+    "output_bin": "golden/blocks/block_0_1_node.output.bin",
+    "input_shape": "golden/blocks/block_0_1_node.input_shape.json",
+    "output_shape": "golden/blocks/block_0_1_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_0_2_edge_coarse_edge0.onnx",
+    "model": "models/blocks/block_0_2_edge_coarse_edge0.onnx",
+    "input_bin": "golden/blocks/block_0_2_edge_coarse_edge0.input.bin",
+    "output_bin": "golden/blocks/block_0_2_edge_coarse_edge0.output.bin",
+    "input_shape": "golden/blocks/block_0_2_edge_coarse_edge0.input_shape.json",
+    "output_shape": "golden/blocks/block_0_2_edge_coarse_edge0.output_shape.json"
+  },
+  {
+    "name": "blocks/block_0_2_edge_mesh_edge.onnx",
+    "model": "models/blocks/block_0_2_edge_mesh_edge.onnx",
+    "input_bin": "golden/blocks/block_0_2_edge_mesh_edge.input.bin",
+    "output_bin": "golden/blocks/block_0_2_edge_mesh_edge.output.bin",
+    "input_shape": "golden/blocks/block_0_2_edge_mesh_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_0_2_edge_mesh_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_0_2_edge_world_edge.onnx",
+    "model": "models/blocks/block_0_2_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_0_2_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_0_2_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_0_2_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_0_2_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_0_2_node.onnx",
+    "model": "models/blocks/block_0_2_node.onnx",
+    "input_bin": "golden/blocks/block_0_2_node.input.bin",
+    "output_bin": "golden/blocks/block_0_2_node.output.bin",
+    "input_shape": "golden/blocks/block_0_2_node.input_shape.json",
+    "output_shape": "golden/blocks/block_0_2_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_1_0_edge_coarse_edge0.onnx",
+    "model": "models/blocks/block_1_0_edge_coarse_edge0.onnx",
+    "input_bin": "golden/blocks/block_1_0_edge_coarse_edge0.input.bin",
+    "output_bin": "golden/blocks/block_1_0_edge_coarse_edge0.output.bin",
+    "input_shape": "golden/blocks/block_1_0_edge_coarse_edge0.input_shape.json",
+    "output_shape": "golden/blocks/block_1_0_edge_coarse_edge0.output_shape.json"
+  },
+  {
+    "name": "blocks/block_1_0_edge_coarse_edge1.onnx",
+    "model": "models/blocks/block_1_0_edge_coarse_edge1.onnx",
+    "input_bin": "golden/blocks/block_1_0_edge_coarse_edge1.input.bin",
+    "output_bin": "golden/blocks/block_1_0_edge_coarse_edge1.output.bin",
+    "input_shape": "golden/blocks/block_1_0_edge_coarse_edge1.input_shape.json",
+    "output_shape": "golden/blocks/block_1_0_edge_coarse_edge1.output_shape.json"
+  },
+  {
+    "name": "blocks/block_1_0_edge_world_edge.onnx",
+    "model": "models/blocks/block_1_0_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_1_0_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_1_0_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_1_0_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_1_0_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_1_0_node.onnx",
+    "model": "models/blocks/block_1_0_node.onnx",
+    "input_bin": "golden/blocks/block_1_0_node.input.bin",
+    "output_bin": "golden/blocks/block_1_0_node.output.bin",
+    "input_shape": "golden/blocks/block_1_0_node.input_shape.json",
+    "output_shape": "golden/blocks/block_1_0_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_1_1_edge_coarse_edge0.onnx",
+    "model": "models/blocks/block_1_1_edge_coarse_edge0.onnx",
+    "input_bin": "golden/blocks/block_1_1_edge_coarse_edge0.input.bin",
+    "output_bin": "golden/blocks/block_1_1_edge_coarse_edge0.output.bin",
+    "input_shape": "golden/blocks/block_1_1_edge_coarse_edge0.input_shape.json",
+    "output_shape": "golden/blocks/block_1_1_edge_coarse_edge0.output_shape.json"
+  },
+  {
+    "name": "blocks/block_1_1_edge_coarse_edge1.onnx",
+    "model": "models/blocks/block_1_1_edge_coarse_edge1.onnx",
+    "input_bin": "golden/blocks/block_1_1_edge_coarse_edge1.input.bin",
+    "output_bin": "golden/blocks/block_1_1_edge_coarse_edge1.output.bin",
+    "input_shape": "golden/blocks/block_1_1_edge_coarse_edge1.input_shape.json",
+    "output_shape": "golden/blocks/block_1_1_edge_coarse_edge1.output_shape.json"
+  },
+  {
+    "name": "blocks/block_1_1_edge_world_edge.onnx",
+    "model": "models/blocks/block_1_1_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_1_1_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_1_1_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_1_1_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_1_1_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_1_1_node.onnx",
+    "model": "models/blocks/block_1_1_node.onnx",
+    "input_bin": "golden/blocks/block_1_1_node.input.bin",
+    "output_bin": "golden/blocks/block_1_1_node.output.bin",
+    "input_shape": "golden/blocks/block_1_1_node.input_shape.json",
+    "output_shape": "golden/blocks/block_1_1_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_1_2_edge_coarse_edge0.onnx",
+    "model": "models/blocks/block_1_2_edge_coarse_edge0.onnx",
+    "input_bin": "golden/blocks/block_1_2_edge_coarse_edge0.input.bin",
+    "output_bin": "golden/blocks/block_1_2_edge_coarse_edge0.output.bin",
+    "input_shape": "golden/blocks/block_1_2_edge_coarse_edge0.input_shape.json",
+    "output_shape": "golden/blocks/block_1_2_edge_coarse_edge0.output_shape.json"
+  },
+  {
+    "name": "blocks/block_1_2_edge_coarse_edge1.onnx",
+    "model": "models/blocks/block_1_2_edge_coarse_edge1.onnx",
+    "input_bin": "golden/blocks/block_1_2_edge_coarse_edge1.input.bin",
+    "output_bin": "golden/blocks/block_1_2_edge_coarse_edge1.output.bin",
+    "input_shape": "golden/blocks/block_1_2_edge_coarse_edge1.input_shape.json",
+    "output_shape": "golden/blocks/block_1_2_edge_coarse_edge1.output_shape.json"
+  },
+  {
+    "name": "blocks/block_1_2_edge_world_edge.onnx",
+    "model": "models/blocks/block_1_2_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_1_2_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_1_2_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_1_2_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_1_2_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_1_2_node.onnx",
+    "model": "models/blocks/block_1_2_node.onnx",
+    "input_bin": "golden/blocks/block_1_2_node.input.bin",
+    "output_bin": "golden/blocks/block_1_2_node.output.bin",
+    "input_shape": "golden/blocks/block_1_2_node.input_shape.json",
+    "output_shape": "golden/blocks/block_1_2_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_2_0_edge_coarse_edge1.onnx",
+    "model": "models/blocks/block_2_0_edge_coarse_edge1.onnx",
+    "input_bin": "golden/blocks/block_2_0_edge_coarse_edge1.input.bin",
+    "output_bin": "golden/blocks/block_2_0_edge_coarse_edge1.output.bin",
+    "input_shape": "golden/blocks/block_2_0_edge_coarse_edge1.input_shape.json",
+    "output_shape": "golden/blocks/block_2_0_edge_coarse_edge1.output_shape.json"
+  },
+  {
+    "name": "blocks/block_2_0_edge_world_edge.onnx",
+    "model": "models/blocks/block_2_0_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_2_0_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_2_0_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_2_0_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_2_0_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_2_0_node.onnx",
+    "model": "models/blocks/block_2_0_node.onnx",
+    "input_bin": "golden/blocks/block_2_0_node.input.bin",
+    "output_bin": "golden/blocks/block_2_0_node.output.bin",
+    "input_shape": "golden/blocks/block_2_0_node.input_shape.json",
+    "output_shape": "golden/blocks/block_2_0_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_2_1_edge_coarse_edge1.onnx",
+    "model": "models/blocks/block_2_1_edge_coarse_edge1.onnx",
+    "input_bin": "golden/blocks/block_2_1_edge_coarse_edge1.input.bin",
+    "output_bin": "golden/blocks/block_2_1_edge_coarse_edge1.output.bin",
+    "input_shape": "golden/blocks/block_2_1_edge_coarse_edge1.input_shape.json",
+    "output_shape": "golden/blocks/block_2_1_edge_coarse_edge1.output_shape.json"
+  },
+  {
+    "name": "blocks/block_2_1_edge_world_edge.onnx",
+    "model": "models/blocks/block_2_1_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_2_1_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_2_1_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_2_1_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_2_1_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_2_1_node.onnx",
+    "model": "models/blocks/block_2_1_node.onnx",
+    "input_bin": "golden/blocks/block_2_1_node.input.bin",
+    "output_bin": "golden/blocks/block_2_1_node.output.bin",
+    "input_shape": "golden/blocks/block_2_1_node.input_shape.json",
+    "output_shape": "golden/blocks/block_2_1_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_2_2_edge_coarse_edge1.onnx",
+    "model": "models/blocks/block_2_2_edge_coarse_edge1.onnx",
+    "input_bin": "golden/blocks/block_2_2_edge_coarse_edge1.input.bin",
+    "output_bin": "golden/blocks/block_2_2_edge_coarse_edge1.output.bin",
+    "input_shape": "golden/blocks/block_2_2_edge_coarse_edge1.input_shape.json",
+    "output_shape": "golden/blocks/block_2_2_edge_coarse_edge1.output_shape.json"
+  },
+  {
+    "name": "blocks/block_2_2_edge_world_edge.onnx",
+    "model": "models/blocks/block_2_2_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_2_2_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_2_2_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_2_2_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_2_2_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_2_2_node.onnx",
+    "model": "models/blocks/block_2_2_node.onnx",
+    "input_bin": "golden/blocks/block_2_2_node.input.bin",
+    "output_bin": "golden/blocks/block_2_2_node.output.bin",
+    "input_shape": "golden/blocks/block_2_2_node.input_shape.json",
+    "output_shape": "golden/blocks/block_2_2_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_3_0_edge_coarse_edge0.onnx",
+    "model": "models/blocks/block_3_0_edge_coarse_edge0.onnx",
+    "input_bin": "golden/blocks/block_3_0_edge_coarse_edge0.input.bin",
+    "output_bin": "golden/blocks/block_3_0_edge_coarse_edge0.output.bin",
+    "input_shape": "golden/blocks/block_3_0_edge_coarse_edge0.input_shape.json",
+    "output_shape": "golden/blocks/block_3_0_edge_coarse_edge0.output_shape.json"
+  },
+  {
+    "name": "blocks/block_3_0_edge_coarse_edge1.onnx",
+    "model": "models/blocks/block_3_0_edge_coarse_edge1.onnx",
+    "input_bin": "golden/blocks/block_3_0_edge_coarse_edge1.input.bin",
+    "output_bin": "golden/blocks/block_3_0_edge_coarse_edge1.output.bin",
+    "input_shape": "golden/blocks/block_3_0_edge_coarse_edge1.input_shape.json",
+    "output_shape": "golden/blocks/block_3_0_edge_coarse_edge1.output_shape.json"
+  },
+  {
+    "name": "blocks/block_3_0_edge_world_edge.onnx",
+    "model": "models/blocks/block_3_0_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_3_0_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_3_0_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_3_0_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_3_0_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_3_0_node.onnx",
+    "model": "models/blocks/block_3_0_node.onnx",
+    "input_bin": "golden/blocks/block_3_0_node.input.bin",
+    "output_bin": "golden/blocks/block_3_0_node.output.bin",
+    "input_shape": "golden/blocks/block_3_0_node.input_shape.json",
+    "output_shape": "golden/blocks/block_3_0_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_3_1_edge_coarse_edge0.onnx",
+    "model": "models/blocks/block_3_1_edge_coarse_edge0.onnx",
+    "input_bin": "golden/blocks/block_3_1_edge_coarse_edge0.input.bin",
+    "output_bin": "golden/blocks/block_3_1_edge_coarse_edge0.output.bin",
+    "input_shape": "golden/blocks/block_3_1_edge_coarse_edge0.input_shape.json",
+    "output_shape": "golden/blocks/block_3_1_edge_coarse_edge0.output_shape.json"
+  },
+  {
+    "name": "blocks/block_3_1_edge_coarse_edge1.onnx",
+    "model": "models/blocks/block_3_1_edge_coarse_edge1.onnx",
+    "input_bin": "golden/blocks/block_3_1_edge_coarse_edge1.input.bin",
+    "output_bin": "golden/blocks/block_3_1_edge_coarse_edge1.output.bin",
+    "input_shape": "golden/blocks/block_3_1_edge_coarse_edge1.input_shape.json",
+    "output_shape": "golden/blocks/block_3_1_edge_coarse_edge1.output_shape.json"
+  },
+  {
+    "name": "blocks/block_3_1_edge_world_edge.onnx",
+    "model": "models/blocks/block_3_1_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_3_1_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_3_1_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_3_1_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_3_1_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_3_1_node.onnx",
+    "model": "models/blocks/block_3_1_node.onnx",
+    "input_bin": "golden/blocks/block_3_1_node.input.bin",
+    "output_bin": "golden/blocks/block_3_1_node.output.bin",
+    "input_shape": "golden/blocks/block_3_1_node.input_shape.json",
+    "output_shape": "golden/blocks/block_3_1_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_3_2_edge_coarse_edge0.onnx",
+    "model": "models/blocks/block_3_2_edge_coarse_edge0.onnx",
+    "input_bin": "golden/blocks/block_3_2_edge_coarse_edge0.input.bin",
+    "output_bin": "golden/blocks/block_3_2_edge_coarse_edge0.output.bin",
+    "input_shape": "golden/blocks/block_3_2_edge_coarse_edge0.input_shape.json",
+    "output_shape": "golden/blocks/block_3_2_edge_coarse_edge0.output_shape.json"
+  },
+  {
+    "name": "blocks/block_3_2_edge_coarse_edge1.onnx",
+    "model": "models/blocks/block_3_2_edge_coarse_edge1.onnx",
+    "input_bin": "golden/blocks/block_3_2_edge_coarse_edge1.input.bin",
+    "output_bin": "golden/blocks/block_3_2_edge_coarse_edge1.output.bin",
+    "input_shape": "golden/blocks/block_3_2_edge_coarse_edge1.input_shape.json",
+    "output_shape": "golden/blocks/block_3_2_edge_coarse_edge1.output_shape.json"
+  },
+  {
+    "name": "blocks/block_3_2_edge_world_edge.onnx",
+    "model": "models/blocks/block_3_2_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_3_2_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_3_2_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_3_2_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_3_2_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_3_2_node.onnx",
+    "model": "models/blocks/block_3_2_node.onnx",
+    "input_bin": "golden/blocks/block_3_2_node.input.bin",
+    "output_bin": "golden/blocks/block_3_2_node.output.bin",
+    "input_shape": "golden/blocks/block_3_2_node.input_shape.json",
+    "output_shape": "golden/blocks/block_3_2_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_4_0_edge_coarse_edge0.onnx",
+    "model": "models/blocks/block_4_0_edge_coarse_edge0.onnx",
+    "input_bin": "golden/blocks/block_4_0_edge_coarse_edge0.input.bin",
+    "output_bin": "golden/blocks/block_4_0_edge_coarse_edge0.output.bin",
+    "input_shape": "golden/blocks/block_4_0_edge_coarse_edge0.input_shape.json",
+    "output_shape": "golden/blocks/block_4_0_edge_coarse_edge0.output_shape.json"
+  },
+  {
+    "name": "blocks/block_4_0_edge_mesh_edge.onnx",
+    "model": "models/blocks/block_4_0_edge_mesh_edge.onnx",
+    "input_bin": "golden/blocks/block_4_0_edge_mesh_edge.input.bin",
+    "output_bin": "golden/blocks/block_4_0_edge_mesh_edge.output.bin",
+    "input_shape": "golden/blocks/block_4_0_edge_mesh_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_4_0_edge_mesh_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_4_0_edge_world_edge.onnx",
+    "model": "models/blocks/block_4_0_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_4_0_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_4_0_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_4_0_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_4_0_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_4_0_node.onnx",
+    "model": "models/blocks/block_4_0_node.onnx",
+    "input_bin": "golden/blocks/block_4_0_node.input.bin",
+    "output_bin": "golden/blocks/block_4_0_node.output.bin",
+    "input_shape": "golden/blocks/block_4_0_node.input_shape.json",
+    "output_shape": "golden/blocks/block_4_0_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_4_1_edge_coarse_edge0.onnx",
+    "model": "models/blocks/block_4_1_edge_coarse_edge0.onnx",
+    "input_bin": "golden/blocks/block_4_1_edge_coarse_edge0.input.bin",
+    "output_bin": "golden/blocks/block_4_1_edge_coarse_edge0.output.bin",
+    "input_shape": "golden/blocks/block_4_1_edge_coarse_edge0.input_shape.json",
+    "output_shape": "golden/blocks/block_4_1_edge_coarse_edge0.output_shape.json"
+  },
+  {
+    "name": "blocks/block_4_1_edge_mesh_edge.onnx",
+    "model": "models/blocks/block_4_1_edge_mesh_edge.onnx",
+    "input_bin": "golden/blocks/block_4_1_edge_mesh_edge.input.bin",
+    "output_bin": "golden/blocks/block_4_1_edge_mesh_edge.output.bin",
+    "input_shape": "golden/blocks/block_4_1_edge_mesh_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_4_1_edge_mesh_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_4_1_edge_world_edge.onnx",
+    "model": "models/blocks/block_4_1_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_4_1_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_4_1_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_4_1_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_4_1_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_4_1_node.onnx",
+    "model": "models/blocks/block_4_1_node.onnx",
+    "input_bin": "golden/blocks/block_4_1_node.input.bin",
+    "output_bin": "golden/blocks/block_4_1_node.output.bin",
+    "input_shape": "golden/blocks/block_4_1_node.input_shape.json",
+    "output_shape": "golden/blocks/block_4_1_node.output_shape.json"
+  },
+  {
+    "name": "blocks/block_4_2_edge_coarse_edge0.onnx",
+    "model": "models/blocks/block_4_2_edge_coarse_edge0.onnx",
+    "input_bin": "golden/blocks/block_4_2_edge_coarse_edge0.input.bin",
+    "output_bin": "golden/blocks/block_4_2_edge_coarse_edge0.output.bin",
+    "input_shape": "golden/blocks/block_4_2_edge_coarse_edge0.input_shape.json",
+    "output_shape": "golden/blocks/block_4_2_edge_coarse_edge0.output_shape.json"
+  },
+  {
+    "name": "blocks/block_4_2_edge_mesh_edge.onnx",
+    "model": "models/blocks/block_4_2_edge_mesh_edge.onnx",
+    "input_bin": "golden/blocks/block_4_2_edge_mesh_edge.input.bin",
+    "output_bin": "golden/blocks/block_4_2_edge_mesh_edge.output.bin",
+    "input_shape": "golden/blocks/block_4_2_edge_mesh_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_4_2_edge_mesh_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_4_2_edge_world_edge.onnx",
+    "model": "models/blocks/block_4_2_edge_world_edge.onnx",
+    "input_bin": "golden/blocks/block_4_2_edge_world_edge.input.bin",
+    "output_bin": "golden/blocks/block_4_2_edge_world_edge.output.bin",
+    "input_shape": "golden/blocks/block_4_2_edge_world_edge.input_shape.json",
+    "output_shape": "golden/blocks/block_4_2_edge_world_edge.output_shape.json"
+  },
+  {
+    "name": "blocks/block_4_2_node.onnx",
+    "model": "models/blocks/block_4_2_node.onnx",
+    "input_bin": "golden/blocks/block_4_2_node.input.bin",
+    "output_bin": "golden/blocks/block_4_2_node.output.bin",
+    "input_shape": "golden/blocks/block_4_2_node.input_shape.json",
+    "output_shape": "golden/blocks/block_4_2_node.output_shape.json"
+  },
+  {
+    "name": "edge_encoder_coarse0.onnx",
+    "model": "models/edge_encoder_coarse0.onnx",
+    "input_bin": "golden/edge_encoder_coarse0.input.bin",
+    "output_bin": "golden/edge_encoder_coarse0.output.bin",
+    "input_shape": "golden/edge_encoder_coarse0.input_shape.json",
+    "output_shape": "golden/edge_encoder_coarse0.output_shape.json"
+  },
+  {
+    "name": "edge_encoder_coarse1.onnx",
+    "model": "models/edge_encoder_coarse1.onnx",
+    "input_bin": "golden/edge_encoder_coarse1.input.bin",
+    "output_bin": "golden/edge_encoder_coarse1.output.bin",
+    "input_shape": "golden/edge_encoder_coarse1.input_shape.json",
+    "output_shape": "golden/edge_encoder_coarse1.output_shape.json"
+  },
+  {
+    "name": "edge_encoder_coarse2.onnx",
+    "model": "models/edge_encoder_coarse2.onnx",
+    "input_bin": "golden/edge_encoder_coarse2.input.bin",
+    "output_bin": "golden/edge_encoder_coarse2.output.bin",
+    "input_shape": "golden/edge_encoder_coarse2.input_shape.json",
+    "output_shape": "golden/edge_encoder_coarse2.output_shape.json"
+  },
+  {
+    "name": "edge_encoder_mesh.onnx",
+    "model": "models/edge_encoder_mesh.onnx",
+    "input_bin": "golden/edge_encoder_mesh.input.bin",
+    "output_bin": "golden/edge_encoder_mesh.output.bin",
+    "input_shape": "golden/edge_encoder_mesh.input_shape.json",
+    "output_shape": "golden/edge_encoder_mesh.output_shape.json"
+  },
+  {
+    "name": "edge_encoder_world.onnx",
+    "model": "models/edge_encoder_world.onnx",
+    "input_bin": "golden/edge_encoder_world.input.bin",
+    "output_bin": "golden/edge_encoder_world.output.bin",
+    "input_shape": "golden/edge_encoder_world.input_shape.json",
+    "output_shape": "golden/edge_encoder_world.output_shape.json"
+  },
+  {
+    "name": "node_decoder.onnx",
+    "model": "models/node_decoder.onnx",
+    "input_bin": "golden/node_decoder.input.bin",
+    "output_bin": "golden/node_decoder.output.bin",
+    "input_shape": "golden/node_decoder.input_shape.json",
+    "output_shape": "golden/node_decoder.output_shape.json"
+  },
+  {
+    "name": "node_encoder.onnx",
+    "model": "models/node_encoder.onnx",
+    "input_bin": "golden/node_encoder.input.bin",
+    "output_bin": "golden/node_encoder.output.bin",
+    "input_shape": "golden/node_encoder.input_shape.json",
+    "output_shape": "golden/node_encoder.output_shape.json"
+  }
+]

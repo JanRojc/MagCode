@@ -1,0 +1,74 @@
+[
+  {
+    "name": "probe/add",
+    "model": "probes/add.onnx",
+    "input_bin": "probes/add_input.bin",
+    "input_shape": "probes/add_input_shape.json"
+  },
+  {
+    "name": "probe/sub",
+    "model": "probes/sub.onnx",
+    "input_bin": "probes/sub_input.bin",
+    "input_shape": "probes/sub_input_shape.json"
+  },
+  {
+    "name": "probe/mul",
+    "model": "probes/mul.onnx",
+    "input_bin": "probes/mul_input.bin",
+    "input_shape": "probes/mul_input_shape.json"
+  },
+  {
+    "name": "probe/div",
+    "model": "probes/div.onnx",
+    "input_bin": "probes/div_input.bin",
+    "input_shape": "probes/div_input_shape.json"
+  },
+  {
+    "name": "probe/pow",
+    "model": "probes/pow.onnx",
+    "input_bin": "probes/pow_input.bin",
+    "input_shape": "probes/pow_input_shape.json"
+  },
+  {
+    "name": "probe/sqrt",
+    "model": "probes/sqrt.onnx",
+    "input_bin": "probes/sqrt_input.bin",
+    "input_shape": "probes/sqrt_input_shape.json"
+  },
+  {
+    "name": "probe/reduce_mean",
+    "model": "probes/reduce_mean.onnx",
+    "input_bin": "probes/reduce_mean_input.bin",
+    "input_shape": "probes/reduce_mean_input_shape.json"
+  },
+  {
+    "name": "probe/relu",
+    "model": "probes/relu.onnx",
+    "input_bin": "probes/relu_input.bin",
+    "input_shape": "probes/relu_input_shape.json"
+  },
+  {
+    "name": "probe/gemm",
+    "model": "probes/gemm.onnx",
+    "input_bin": "probes/gemm_input.bin",
+    "input_shape": "probes/gemm_input_shape.json"
+  },
+  {
+    "name": "probe/gemm_transb1",
+    "model": "probes/gemm_transb1.onnx",
+    "input_bin": "probes/gemm_transb1_input.bin",
+    "input_shape": "probes/gemm_transb1_input_shape.json"
+  },
+  {
+    "name": "probe/layernorm_prim",
+    "model": "probes/layernorm_prim.onnx",
+    "input_bin": "probes/layernorm_prim_input.bin",
+    "input_shape": "probes/layernorm_prim_input_shape.json"
+  },
+  {
+    "name": "probe/block_mlp_ln_8x384_128",
+    "model": "probes/block_mlp_ln_8x384_128.onnx",
+    "input_bin": "probes/block_mlp_ln_8x384_128_input.bin",
+    "input_shape": "probes/block_mlp_ln_8x384_128_input_shape.json"
+  }
+]
