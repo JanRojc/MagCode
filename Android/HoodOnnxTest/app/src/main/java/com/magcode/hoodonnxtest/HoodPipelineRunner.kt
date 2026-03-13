@@ -4,6 +4,7 @@ import android.content.res.AssetManager
 import android.util.Log
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtLoggingLevel
 import ai.onnxruntime.OrtSession
 import org.json.JSONArray
 import org.json.JSONObject
@@ -12,108 +13,262 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 object HoodPipelineRunner {
+    private const val EDGE_MLP_CHUNK_EDGES = 4096
+
+    private data class ProfiledSession(
+        val label: String,
+        val session: OrtSession
+    )
+
+    private data class SharedSessions(
+        val nodeEnc: ProfiledSession,
+        val edgeMeshEnc: ProfiledSession,
+        val edgeWorldEnc: ProfiledSession,
+        val edgeCoarse0Enc: ProfiledSession,
+        val edgeCoarse1Enc: ProfiledSession,
+        val edgeCoarse2Enc: ProfiledSession,
+        val decoder: ProfiledSession
+    )
+
+    private data class EdgeStash(
+        val oldIndex: IntArray,
+        val oldFeatures: FloatArray,
+        val mask: BooleanArray
+    )
+
+    private data class DownsampleStash(
+        val worldDirect: EdgeStash,
+        val worldInverse: EdgeStash
+    )
+
+    private data class FrameRunResult(
+        val line: String,
+        val maxDiff: Float
+    )
+
+    private data class PreparedInputs(
+        val clothRaw: FloatArray,
+        val obstacleRaw: FloatArray,
+        val meshRaw: FloatArray,
+        val coarse0Raw: FloatArray,
+        val coarse1Raw: FloatArray,
+        val coarse2Raw: FloatArray,
+        val worldDirectRaw: FloatArray,
+        val worldInverseRaw: FloatArray
+    )
+
     fun run(
         assets: AssetManager,
         filesDir: File,
         env: OrtEnvironment,
-        opts: OrtSession.SessionOptions
+        profileDir: File
     ): String {
-        val config = readJsonObject(assets, "pipeline/config.json")
+        return when {
+            assetExists(assets, "pipeline_real_sequence/config.json") -> runSequence(assets, filesDir, env, profileDir)
+            assetExists(assets, "pipeline_real/config.json") -> runSingle(assets, filesDir, env, profileDir, "pipeline_real", logIntermediate = true)
+            else -> runSingle(assets, filesDir, env, profileDir, "pipeline", logIntermediate = true)
+        }
+    }
+
+    private fun runSequence(
+        assets: AssetManager,
+        filesDir: File,
+        env: OrtEnvironment,
+        profileDir: File
+    ): String {
+        val config = readJsonObject(assets, "pipeline_real_sequence/config.json")
+        val frames = config.getJSONArray("frames")
+        val modelBase = selectModelBase(assets)
+        val sessions = createSharedSessions(env, assets, filesDir, profileDir, modelBase)
+        val lines = mutableListOf<String>()
+        var maxDiffAll = 0f
+        try {
+            for (i in 0 until frames.length()) {
+                val frame = frames.getJSONObject(i)
+                val frameIdx = frame.getInt("frame_idx")
+                val assetBase = frame.getString("asset_base")
+                val result = runFrame(assets, filesDir, env, assetBase, modelBase, sessions, logIntermediate = i == 0)
+                if (result.maxDiff > maxDiffAll) maxDiffAll = result.maxDiff
+                val line = "sequence frame=$frameIdx ${result.line}"
+                lines.add(line)
+                Log.i("HoodOnnxTest", line)
+            }
+        } finally {
+            closeSharedSessions(sessions)
+        }
+
+        val summary = "sequence frames=${frames.length()} max_abs_diff=$maxDiffAll"
+        Log.i("HoodOnnxTest", summary)
+        return buildString {
+            append(summary)
+            if (lines.isNotEmpty()) {
+                append("\n")
+                append(lines.joinToString(separator = "\n"))
+            }
+        }
+    }
+
+    private fun runSingle(
+        assets: AssetManager,
+        filesDir: File,
+        env: OrtEnvironment,
+        profileDir: File,
+        assetBase: String,
+        logIntermediate: Boolean
+    ): String {
+        val modelBase = selectModelBase(assets)
+        val sessions = createSharedSessions(env, assets, filesDir, profileDir, modelBase)
+        return try {
+            runFrame(assets, filesDir, env, assetBase, modelBase, sessions, logIntermediate).line
+        } finally {
+            closeSharedSessions(sessions)
+        }
+    }
+
+    private fun runFrame(
+        assets: AssetManager,
+        filesDir: File,
+        env: OrtEnvironment,
+        assetBase: String,
+        modelBase: String,
+        shared: SharedSessions,
+        logIntermediate: Boolean
+    ): FrameRunResult {
+        val config = readJsonObject(assets, "$assetBase/config.json")
         val nCloth = config.getInt("N_cloth")
         val nObs = config.getInt("N_obstacle")
-        val eBlock = config.getInt("E_block")
-        val eEncoder = config.getInt("E_encoder")
         val latent = config.getInt("latent_size")
-        val outSize = config.getInt("output_size")
         val blocks = config.getJSONArray("blocks")
+        val processSteps = config.optJSONArray("process_steps")
 
-        val clothRaw = readFloatBinary(assets, "pipeline/cloth_raw.bin")
-        val obstacleRaw = readFloatBinary(assets, "pipeline/obstacle_raw.bin")
-        val meshRaw = readFloatBinary(assets, "pipeline/mesh_raw.bin")
-        val coarse0Raw = readFloatBinary(assets, "pipeline/coarse0_raw.bin")
-        val coarse1Raw = readFloatBinary(assets, "pipeline/coarse1_raw.bin")
-        val coarse2Raw = readFloatBinary(assets, "pipeline/coarse2_raw.bin")
-        val worldDirectRaw = readFloatBinary(assets, "pipeline/world_direct_raw.bin")
-        val worldInverseRaw = readFloatBinary(assets, "pipeline/world_inverse_raw.bin")
+        val obstacleActiveMask = readIntBinarySafe(assets, "$assetBase/obstacle_active_mask.bin")
 
-        val edgeIndexMesh = readIntBinary(assets, "pipeline/edge_index_mesh.bin")
-        val edgeIndexCoarse0 = readIntBinary(assets, "pipeline/edge_index_coarse0.bin")
-        val edgeIndexCoarse1 = readIntBinary(assets, "pipeline/edge_index_coarse1.bin")
-        val edgeIndexCoarse2 = readIntBinary(assets, "pipeline/edge_index_coarse2.bin")
-        val edgeIndexWorldDirect = readIntBinary(assets, "pipeline/edge_index_world_direct.bin")
-        val edgeIndexWorldInverse = readIntBinary(assets, "pipeline/edge_index_world_inverse.bin")
+        val edgeIndexMesh = readIntBinary(assets, "$assetBase/edge_index_mesh.bin")
+        val edgeIndexCoarse0 = readIntBinary(assets, "$assetBase/edge_index_coarse0.bin")
+        val edgeIndexCoarse1 = readIntBinary(assets, "$assetBase/edge_index_coarse1.bin")
+        val edgeIndexCoarse2 = readIntBinary(assets, "$assetBase/edge_index_coarse2.bin")
+        var edgeIndexWorldDirect = readIntBinary(assets, "$assetBase/edge_index_world_direct.bin")
+        var edgeIndexWorldInverse = readIntBinary(assets, "$assetBase/edge_index_world_inverse.bin")
 
-        val expected = readFloatBinary(assets, "pipeline/expected_output.bin")
+        val usesLocalPreparedInputs = assetExists(assets, "$assetBase/node_norm_mean.bin")
+        val preparedInputs = if (usesLocalPreparedInputs) {
+            buildPreparedInputsLocally(
+                assets,
+                assetBase,
+                nCloth,
+                nObs,
+                edgeIndexMesh,
+                edgeIndexCoarse0,
+                edgeIndexCoarse1,
+                edgeIndexCoarse2,
+                edgeIndexWorldDirect,
+                edgeIndexWorldInverse,
+                obstacleActiveMask
+            )
+        } else {
+            PreparedInputs(
+                clothRaw = readFloatBinary(assets, "$assetBase/cloth_raw.bin"),
+                obstacleRaw = readFloatBinary(assets, "$assetBase/obstacle_raw.bin"),
+                meshRaw = readFloatBinary(assets, "$assetBase/mesh_raw.bin"),
+                coarse0Raw = readFloatBinary(assets, "$assetBase/coarse0_raw.bin"),
+                coarse1Raw = readFloatBinary(assets, "$assetBase/coarse1_raw.bin"),
+                coarse2Raw = readFloatBinary(assets, "$assetBase/coarse2_raw.bin"),
+                worldDirectRaw = readFloatBinary(assets, "$assetBase/world_direct_raw.bin"),
+                worldInverseRaw = readFloatBinary(assets, "$assetBase/world_inverse_raw.bin")
+            )
+        }
+        if (usesLocalPreparedInputs) {
+            Log.i("HoodOnnxTest", "using local node/static-edge feature construction for $assetBase")
+            if (logIntermediate) {
+                logPreparedInputDiffs(assets, assetBase, preparedInputs, nCloth, nObs, edgeIndexMesh, edgeIndexCoarse0, edgeIndexCoarse1, edgeIndexCoarse2, edgeIndexWorldDirect, edgeIndexWorldInverse)
+            }
+        }
+
+        val clothRaw = preparedInputs.clothRaw
+        val obstacleRaw = preparedInputs.obstacleRaw
+        val meshRaw = preparedInputs.meshRaw
+        val coarse0Raw = preparedInputs.coarse0Raw
+        val coarse1Raw = preparedInputs.coarse1Raw
+        val coarse2Raw = preparedInputs.coarse2Raw
+        val worldDirectRaw = preparedInputs.worldDirectRaw
+        val worldInverseRaw = preparedInputs.worldInverseRaw
+
+        val expected = readFloatBinary(assets, "$assetBase/expected_output.bin")
 
         // Optional debug expected tensors
-        val expNodeEncCloth = readFloatBinarySafe(assets, "pipeline/expected_node_encoder_cloth.bin")
-        val expNodeEncObs = readFloatBinarySafe(assets, "pipeline/expected_node_encoder_obstacle.bin")
-        val expEdgeMesh = readFloatBinarySafe(assets, "pipeline/expected_edge_encoder_mesh.bin")
-        val expEdgeCoarse0 = readFloatBinarySafe(assets, "pipeline/expected_edge_encoder_coarse0.bin")
-        val expEdgeCoarse1 = readFloatBinarySafe(assets, "pipeline/expected_edge_encoder_coarse1.bin")
-        val expEdgeCoarse2 = readFloatBinarySafe(assets, "pipeline/expected_edge_encoder_coarse2.bin")
-        val expEdgeWorldDirect = readFloatBinarySafe(assets, "pipeline/expected_edge_encoder_world_direct.bin")
-        val expEdgeWorldInverse = readFloatBinarySafe(assets, "pipeline/expected_edge_encoder_world_inverse.bin")
-        val expBlock0NodeIn = readFloatBinarySafe(assets, "pipeline/blocks/block_0_0_node_in_cloth.bin")
-        val expBlock0NodeOut = readFloatBinarySafe(assets, "pipeline/blocks/block_0_0_node_out_cloth.bin")
-        val expBlock0UpdWorldDirect = readFloatBinarySafe(assets, "pipeline/blocks/block_0_0_updated_world_direct.bin")
-        val expBlock0UpdWorldInverse = readFloatBinarySafe(assets, "pipeline/blocks/block_0_0_updated_world_inverse.bin")
-        val expBlock0UpdMesh = readFloatBinarySafe(assets, "pipeline/blocks/block_0_0_updated_mesh.bin")
-        val expBlock0UpdCoarse0 = readFloatBinarySafe(assets, "pipeline/blocks/block_0_0_updated_coarse0.bin")
-        val expBlock0AggWorld = readFloatBinarySafe(assets, "pipeline/blocks/block_0_0_agg_world_cloth.bin")
-        val expBlock0AggMesh = readFloatBinarySafe(assets, "pipeline/blocks/block_0_0_agg_mesh.bin")
-        val expBlock0AggCoarse0 = readFloatBinarySafe(assets, "pipeline/blocks/block_0_0_agg_coarse0.bin")
+        val expNodeEncCloth = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/expected_node_encoder_cloth.bin") else null
+        val expNodeEncObs = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/expected_node_encoder_obstacle.bin") else null
+        val expEdgeMesh = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/expected_edge_encoder_mesh.bin") else null
+        val expEdgeCoarse0 = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/expected_edge_encoder_coarse0.bin") else null
+        val expEdgeCoarse1 = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/expected_edge_encoder_coarse1.bin") else null
+        val expEdgeCoarse2 = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/expected_edge_encoder_coarse2.bin") else null
+        val expEdgeWorldDirect = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/expected_edge_encoder_world_direct.bin") else null
+        val expEdgeWorldInverse = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/expected_edge_encoder_world_inverse.bin") else null
+        val expBlock0NodeIn = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/blocks/block_0_0_node_in_cloth.bin") else null
+        val expBlock0NodeOut = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/blocks/block_0_0_node_out_cloth.bin") else null
+        val expBlock0UpdWorldDirect = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/blocks/block_0_0_updated_world_direct.bin") else null
+        val expBlock0UpdWorldInverse = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/blocks/block_0_0_updated_world_inverse.bin") else null
+        val expBlock0UpdMesh = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/blocks/block_0_0_updated_mesh.bin") else null
+        val expBlock0UpdCoarse0 = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/blocks/block_0_0_updated_coarse0.bin") else null
+        val expBlock0AggWorld = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/blocks/block_0_0_agg_world_cloth.bin") else null
+        val expBlock0AggMesh = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/blocks/block_0_0_agg_mesh.bin") else null
+        val expBlock0AggCoarse0 = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/blocks/block_0_0_agg_coarse0.bin") else null
 
-        val shapeClothRaw = readShape(assets, "pipeline/cloth_raw_shape.json")
-        val shapeObsRaw = readShape(assets, "pipeline/obstacle_raw_shape.json")
-        val shapeMeshRaw = readShape(assets, "pipeline/mesh_raw_shape.json")
-        val shapeCoarse0Raw = readShape(assets, "pipeline/coarse0_raw_shape.json")
-        val shapeCoarse1Raw = readShape(assets, "pipeline/coarse1_raw_shape.json")
-        val shapeCoarse2Raw = readShape(assets, "pipeline/coarse2_raw_shape.json")
-        val shapeWorldDirectRaw = readShape(assets, "pipeline/world_direct_raw_shape.json")
-        val shapeWorldInverseRaw = readShape(assets, "pipeline/world_inverse_raw_shape.json")
+        val shapeClothRaw = longArrayOf(nCloth.toLong(), (clothRaw.size / nCloth).toLong())
+        val shapeEdgeMesh = longArrayOf((edgeIndexMesh.size / 2).toLong(), (meshRaw.size / (edgeIndexMesh.size / 2)).toLong())
+        val shapeEdgeCoarse0 = longArrayOf((edgeIndexCoarse0.size / 2).toLong(), (coarse0Raw.size / (edgeIndexCoarse0.size / 2)).toLong())
+        val shapeEdgeCoarse1 = longArrayOf((edgeIndexCoarse1.size / 2).toLong(), (coarse1Raw.size / (edgeIndexCoarse1.size / 2)).toLong())
+        val shapeEdgeCoarse2 = longArrayOf((edgeIndexCoarse2.size / 2).toLong(), (coarse2Raw.size / (edgeIndexCoarse2.size / 2)).toLong())
+        val shapeWorldDirectRaw = longArrayOf((edgeIndexWorldDirect.size / 2).toLong(), (worldDirectRaw.size / (edgeIndexWorldDirect.size / 2)).toLong())
+        val shapeWorldInverseRaw = longArrayOf((edgeIndexWorldInverse.size / 2).toLong(), (worldInverseRaw.size / (edgeIndexWorldInverse.size / 2)).toLong())
+        val shapeWorldCat = longArrayOf(shapeWorldDirectRaw[0] + shapeWorldInverseRaw[0], shapeWorldDirectRaw[1])
 
-        val shapeNodeEnc = shapeClothRaw
-        val shapeNodeEncObs = shapeObsRaw
-        val shapeEdgeMesh = shapeMeshRaw
-        val shapeEdgeCoarse0 = shapeCoarse0Raw
-        val shapeEdgeCoarse1 = shapeCoarse1Raw
-        val shapeEdgeCoarse2 = shapeCoarse2Raw
-        val shapeWorldCat = longArrayOf(eBlock * 2L, shapeWorldDirectRaw[1])
-
-        val modelBase = "models_embedded"
-        val nodeEnc = env.createSession(copyAssetToFile(assets, filesDir, "$modelBase/node_encoder.onnx").absolutePath, opts)
-        val edgeMeshEnc = env.createSession(copyAssetToFile(assets, filesDir, "$modelBase/edge_encoder_mesh.onnx").absolutePath, opts)
-        val edgeWorldEnc = env.createSession(copyAssetToFile(assets, filesDir, "$modelBase/edge_encoder_world.onnx").absolutePath, opts)
-        val edgeCoarse0Enc = env.createSession(copyAssetToFile(assets, filesDir, "$modelBase/edge_encoder_coarse0.onnx").absolutePath, opts)
-        val edgeCoarse1Enc = env.createSession(copyAssetToFile(assets, filesDir, "$modelBase/edge_encoder_coarse1.onnx").absolutePath, opts)
-        val edgeCoarse2Enc = env.createSession(copyAssetToFile(assets, filesDir, "$modelBase/edge_encoder_coarse2.onnx").absolutePath, opts)
-        val decoder = env.createSession(copyAssetToFile(assets, filesDir, "$modelBase/node_decoder.onnx").absolutePath, opts)
-
-        val clothLatent = runOnnx(nodeEnc, clothRaw, shapeNodeEnc)
+        val nodeFeatureDim = shapeClothRaw[1].toInt()
+        val activeMask = obstacleActiveMask ?: IntArray(nObs) { 0 }
+        val nActiveObs = activeMask.count { it != 0 }
+        val combinedNodeRaw = FloatArray((nCloth + nActiveObs) * nodeFeatureDim)
+        System.arraycopy(clothRaw, 0, combinedNodeRaw, 0, clothRaw.size)
+        var activeWrite = nCloth * nodeFeatureDim
+        for (obsIdx in 0 until nObs) {
+            if (activeMask.getOrElse(obsIdx) { 0 } == 0) continue
+            val src = obsIdx * nodeFeatureDim
+            System.arraycopy(obstacleRaw, src, combinedNodeRaw, activeWrite, nodeFeatureDim)
+            activeWrite += nodeFeatureDim
+        }
+        val combinedLatent = runOnnx(shared.nodeEnc.session, combinedNodeRaw, longArrayOf((nCloth + nActiveObs).toLong(), nodeFeatureDim.toLong()))
+        val clothLatent = combinedLatent.copyOfRange(0, nCloth * latent)
         val obsLatent = FloatArray(nObs * latent)
+        var activeRead = nCloth * latent
+        for (obsIdx in 0 until nObs) {
+            if (activeMask.getOrElse(obsIdx) { 0 } == 0) continue
+            val dst = obsIdx * latent
+            System.arraycopy(combinedLatent, activeRead, obsLatent, dst, latent)
+            activeRead += latent
+        }
         logIfExpected("node_encoder_cloth", clothLatent, expNodeEncCloth)
         logIfExpected("node_encoder_obstacle", obsLatent, expNodeEncObs)
 
-        val meshLatentFull = runOnnx(edgeMeshEnc, meshRaw, shapeEdgeMesh)
-        val coarse0LatentFull = runOnnx(edgeCoarse0Enc, coarse0Raw, shapeEdgeCoarse0)
-        val coarse1LatentFull = runOnnx(edgeCoarse1Enc, coarse1Raw, shapeEdgeCoarse1)
-        val coarse2LatentFull = runOnnx(edgeCoarse2Enc, coarse2Raw, shapeEdgeCoarse2)
+        val meshLatentFull = runOnnx(shared.edgeMeshEnc.session, meshRaw, shapeEdgeMesh)
+        val coarse0LatentFull = runOnnx(shared.edgeCoarse0Enc.session, coarse0Raw, shapeEdgeCoarse0)
+        val coarse1LatentFull = runOnnx(shared.edgeCoarse1Enc.session, coarse1Raw, shapeEdgeCoarse1)
+        val coarse2LatentFull = runOnnx(shared.edgeCoarse2Enc.session, coarse2Raw, shapeEdgeCoarse2)
 
         val worldCat = FloatArray(worldDirectRaw.size + worldInverseRaw.size)
         System.arraycopy(worldDirectRaw, 0, worldCat, 0, worldDirectRaw.size)
         System.arraycopy(worldInverseRaw, 0, worldCat, worldDirectRaw.size, worldInverseRaw.size)
-        val worldLatentCat = runOnnx(edgeWorldEnc, worldCat, shapeWorldCat)
+        val worldLatentCat = runOnnx(shared.edgeWorldEnc.session, worldCat, shapeWorldCat)
 
         var clothNodes = clothLatent
         var obsNodes = obsLatent
 
-        var meshEdges = meshLatentFull.copyOfRange(0, eBlock * latent)
-        var coarse0Edges = coarse0LatentFull.copyOfRange(0, eBlock * latent)
-        var coarse1Edges = coarse1LatentFull.copyOfRange(0, eBlock * latent)
-        var coarse2Edges = coarse2LatentFull.copyOfRange(0, eBlock * latent)
-        var worldDirectEdges = worldLatentCat.copyOfRange(0, eBlock * latent)
-        var worldInverseEdges = worldLatentCat.copyOfRange(eBlock * latent, eBlock * latent * 2)
+        var meshEdges = meshLatentFull
+        var coarse0Edges = coarse0LatentFull
+        var coarse1Edges = coarse1LatentFull
+        var coarse2Edges = coarse2LatentFull
+        val nWorldDirect = shapeWorldDirectRaw[0].toInt()
+        val nWorldInverse = shapeWorldInverseRaw[0].toInt()
+        var worldDirectEdges = worldLatentCat.copyOfRange(0, nWorldDirect * latent)
+        var worldInverseEdges = worldLatentCat.copyOfRange(nWorldDirect * latent, (nWorldDirect + nWorldInverse) * latent)
 
         logIfExpected("edge_encoder_mesh", meshEdges, expEdgeMesh)
         logIfExpected("edge_encoder_coarse0", coarse0Edges, expEdgeCoarse0)
@@ -122,58 +277,73 @@ object HoodPipelineRunner {
         logIfExpected("edge_encoder_world_direct", worldDirectEdges, expEdgeWorldDirect)
         logIfExpected("edge_encoder_world_inverse", worldInverseEdges, expEdgeWorldInverse)
 
-        val edgeIndexMap = mapOf(
-            "mesh_edge" to edgeIndexMesh,
-            "coarse_edge0" to edgeIndexCoarse0,
-            "coarse_edge1" to edgeIndexCoarse1,
-            "coarse_edge2" to edgeIndexCoarse2,
-            "world_direct" to edgeIndexWorldDirect,
-            "world_inverse" to edgeIndexWorldInverse
-        )
+        val steps = processSteps ?: buildDefaultProcessSteps(blocks)
+        val downsampleStack = ArrayDeque<DownsampleStash>()
 
-        val zeroCloth = FloatArray(nCloth * latent)
-        val zeroObs = FloatArray(nObs * latent)
+        for (i in 0 until steps.length()) {
+            val step = steps.getJSONObject(i)
+            when (step.getString("type")) {
+                "downsample" -> {
+                    val remainingMask = computeRemainingNodeMask(step.getJSONArray("target_edge_keys"), nCloth, edgeIndexMesh, edgeIndexCoarse0, edgeIndexCoarse1, edgeIndexCoarse2)
+                    val worldDirectStash = filterWorldEdges(edgeIndexWorldDirect, worldDirectEdges, remainingMask, latent, useSourceMask = false, useTargetMask = true)
+                    edgeIndexWorldDirect = worldDirectStash.first
+                    worldDirectEdges = worldDirectStash.second
+                    val worldInverseStash = filterWorldEdges(edgeIndexWorldInverse, worldInverseEdges, remainingMask, latent, useSourceMask = true, useTargetMask = false)
+                    edgeIndexWorldInverse = worldInverseStash.first
+                    worldInverseEdges = worldInverseStash.second
+                    downsampleStack.addLast(DownsampleStash(worldDirectStash.third, worldInverseStash.third))
+                    continue
+                }
+                "upsample" -> {
+                    val stashed = downsampleStack.removeLast()
+                    val restoredWorldDirect = restoreWorldEdges(stashed.worldDirect, worldDirectEdges, latent)
+                    edgeIndexWorldDirect = restoredWorldDirect.first
+                    worldDirectEdges = restoredWorldDirect.second
+                    val restoredWorldInverse = restoreWorldEdges(stashed.worldInverse, worldInverseEdges, latent)
+                    edgeIndexWorldInverse = restoredWorldInverse.first
+                    worldInverseEdges = restoredWorldInverse.second
+                    continue
+                }
+            }
 
-        for (i in 0 until blocks.length()) {
-            val blk = blocks.getJSONObject(i)
-            val level = blk.getInt("level")
-            val block = blk.getInt("block")
-            val edgeKeys = blk.getJSONArray("edge_keys")
+            val level = step.getInt("level")
+            val block = step.getInt("block")
+            val edgeKeys = step.getJSONArray("edge_keys")
 
             val nodePath = "$modelBase/blocks/block_${level}_${block}_node.onnx"
-            val nodeSess = env.createSession(copyAssetToFile(assets, filesDir, nodePath).absolutePath, opts)
+            val nodeSess = createRelaxedSession(env, assets, filesDir, nodePath)
 
             // Edge updates
             val worldEdgePath = "$modelBase/blocks/block_${level}_${block}_edge_world_edge.onnx"
-            val worldEdgeSess = env.createSession(copyAssetToFile(assets, filesDir, worldEdgePath).absolutePath, opts)
+            val worldEdgeSess = createRelaxedSession(env, assets, filesDir, worldEdgePath)
 
             val meshEdgeSess = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_mesh_edge.onnx")) {
-                env.createSession(copyAssetToFile(assets, filesDir, "$modelBase/blocks/block_${level}_${block}_edge_mesh_edge.onnx").absolutePath, opts)
+                createRelaxedSession(env, assets, filesDir, "$modelBase/blocks/block_${level}_${block}_edge_mesh_edge.onnx")
             } else null
             val coarse0Sess = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge0.onnx")) {
-                env.createSession(copyAssetToFile(assets, filesDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge0.onnx").absolutePath, opts)
+                createRelaxedSession(env, assets, filesDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge0.onnx")
             } else null
             val coarse1Sess = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge1.onnx")) {
-                env.createSession(copyAssetToFile(assets, filesDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge1.onnx").absolutePath, opts)
+                createRelaxedSession(env, assets, filesDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge1.onnx")
             } else null
             val coarse2Sess = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge2.onnx")) {
-                env.createSession(copyAssetToFile(assets, filesDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge2.onnx").absolutePath, opts)
+                createRelaxedSession(env, assets, filesDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge2.onnx")
             } else null
 
-            val worldDirectUpd = runEdgeMlp(worldEdgeSess, clothNodes, obsNodes, worldDirectEdges, edgeIndexWorldDirect, eBlock, latent)
-            val worldInverseUpd = runEdgeMlp(worldEdgeSess, obsNodes, clothNodes, worldInverseEdges, edgeIndexWorldInverse, eBlock, latent)
+            val worldDirectUpd = runEdgeMlp(worldEdgeSess, clothNodes, obsNodes, worldDirectEdges, edgeIndexWorldDirect, latent)
+            val worldInverseUpd = runEdgeMlp(worldEdgeSess, obsNodes, clothNodes, worldInverseEdges, edgeIndexWorldInverse, latent)
 
             val meshUpd = if (meshEdgeSess != null) {
-                runEdgeMlp(meshEdgeSess, clothNodes, clothNodes, meshEdges, edgeIndexMesh, eBlock, latent)
+                runEdgeMlp(meshEdgeSess, clothNodes, clothNodes, meshEdges, edgeIndexMesh, latent)
             } else null
             val coarse0Upd = if (coarse0Sess != null) {
-                runEdgeMlp(coarse0Sess, clothNodes, clothNodes, coarse0Edges, edgeIndexCoarse0, eBlock, latent)
+                runEdgeMlp(coarse0Sess, clothNodes, clothNodes, coarse0Edges, edgeIndexCoarse0, latent)
             } else null
             val coarse1Upd = if (coarse1Sess != null) {
-                runEdgeMlp(coarse1Sess, clothNodes, clothNodes, coarse1Edges, edgeIndexCoarse1, eBlock, latent)
+                runEdgeMlp(coarse1Sess, clothNodes, clothNodes, coarse1Edges, edgeIndexCoarse1, latent)
             } else null
             val coarse2Upd = if (coarse2Sess != null) {
-                runEdgeMlp(coarse2Sess, clothNodes, clothNodes, coarse2Edges, edgeIndexCoarse2, eBlock, latent)
+                runEdgeMlp(coarse2Sess, clothNodes, clothNodes, coarse2Edges, edgeIndexCoarse2, latent)
             } else null
 
             if (level == 0 && block == 0) {
@@ -183,60 +353,53 @@ object HoodPipelineRunner {
                 if (coarse0Upd != null) logIfExpected("block_0_0_updated_coarse0", coarse0Upd, expBlock0UpdCoarse0)
             }
 
-            addInPlace(worldDirectEdges, worldDirectUpd)
-            addInPlace(worldInverseEdges, worldInverseUpd)
-            if (meshUpd != null) addInPlace(meshEdges, meshUpd)
-            if (coarse0Upd != null) addInPlace(coarse0Edges, coarse0Upd)
-            if (coarse1Upd != null) addInPlace(coarse1Edges, coarse1Upd)
-            if (coarse2Upd != null) addInPlace(coarse2Edges, coarse2Upd)
-
             val aggWorldCloth = CpuScatterSum.scatterSum(
-                edgeIndexWorldDirect.copyOfRange(0, eBlock),
-                edgeIndexWorldDirect.copyOfRange(eBlock, eBlock * 2),
-                worldDirectEdges,
+                edgeIndexWorldDirect.copyOfRange(0, edgeIndexWorldDirect.size / 2),
+                edgeIndexWorldDirect.copyOfRange(edgeIndexWorldDirect.size / 2, edgeIndexWorldDirect.size),
+                worldDirectUpd,
                 nCloth,
                 latent
             )
             val aggWorldObs = CpuScatterSum.scatterSum(
-                edgeIndexWorldInverse.copyOfRange(0, eBlock),
-                edgeIndexWorldInverse.copyOfRange(eBlock, eBlock * 2),
-                worldInverseEdges,
+                edgeIndexWorldInverse.copyOfRange(0, edgeIndexWorldInverse.size / 2),
+                edgeIndexWorldInverse.copyOfRange(edgeIndexWorldInverse.size / 2, edgeIndexWorldInverse.size),
+                worldInverseUpd,
                 nObs,
                 latent
             )
 
             val aggMesh = if (meshUpd != null) {
                 CpuScatterSum.scatterSum(
-                    edgeIndexMesh.copyOfRange(0, eBlock),
-                    edgeIndexMesh.copyOfRange(eBlock, eBlock * 2),
-                    meshEdges,
+                    edgeIndexMesh.copyOfRange(0, edgeIndexMesh.size / 2),
+                    edgeIndexMesh.copyOfRange(edgeIndexMesh.size / 2, edgeIndexMesh.size),
+                    meshUpd,
                     nCloth,
                     latent
                 )
             } else null
             val aggCoarse0 = if (coarse0Upd != null) {
                 CpuScatterSum.scatterSum(
-                    edgeIndexCoarse0.copyOfRange(0, eBlock),
-                    edgeIndexCoarse0.copyOfRange(eBlock, eBlock * 2),
-                    coarse0Edges,
+                    edgeIndexCoarse0.copyOfRange(0, edgeIndexCoarse0.size / 2),
+                    edgeIndexCoarse0.copyOfRange(edgeIndexCoarse0.size / 2, edgeIndexCoarse0.size),
+                    coarse0Upd,
                     nCloth,
                     latent
                 )
             } else null
             val aggCoarse1 = if (coarse1Upd != null) {
                 CpuScatterSum.scatterSum(
-                    edgeIndexCoarse1.copyOfRange(0, eBlock),
-                    edgeIndexCoarse1.copyOfRange(eBlock, eBlock * 2),
-                    coarse1Edges,
+                    edgeIndexCoarse1.copyOfRange(0, edgeIndexCoarse1.size / 2),
+                    edgeIndexCoarse1.copyOfRange(edgeIndexCoarse1.size / 2, edgeIndexCoarse1.size),
+                    coarse1Upd,
                     nCloth,
                     latent
                 )
             } else null
             val aggCoarse2 = if (coarse2Upd != null) {
                 CpuScatterSum.scatterSum(
-                    edgeIndexCoarse2.copyOfRange(0, eBlock),
-                    edgeIndexCoarse2.copyOfRange(eBlock, eBlock * 2),
-                    coarse2Edges,
+                    edgeIndexCoarse2.copyOfRange(0, edgeIndexCoarse2.size / 2),
+                    edgeIndexCoarse2.copyOfRange(edgeIndexCoarse2.size / 2, edgeIndexCoarse2.size),
+                    coarse2Upd,
                     nCloth,
                     latent
                 )
@@ -263,11 +426,18 @@ object HoodPipelineRunner {
                 logIfExpected("block_0_0_node_out_cloth", nodeOutCloth, expBlock0NodeOut)
             }
 
+            addInPlace(worldDirectEdges, worldDirectUpd)
+            addInPlace(worldInverseEdges, worldInverseUpd)
+            if (meshUpd != null) addInPlace(meshEdges, meshUpd)
+            if (coarse0Upd != null) addInPlace(coarse0Edges, coarse0Upd)
+            if (coarse1Upd != null) addInPlace(coarse1Edges, coarse1Upd)
+            if (coarse2Upd != null) addInPlace(coarse2Edges, coarse2Upd)
+
             addInPlace(clothNodes, nodeOutCloth)
             addInPlace(obsNodes, nodeOutObs)
 
-            val blkKey = "pipeline/blocks/block_${level}_${block}_cloth_nodes.bin"
-            val expBlk = readFloatBinarySafe(assets, blkKey)
+            val blkKey = "$assetBase/blocks/block_${level}_${block}_cloth_nodes.bin"
+            val expBlk = if (logIntermediate) readFloatBinarySafe(assets, blkKey) else null
             logIfExpected("block_${level}_${block}_cloth_nodes", clothNodes, expBlk)
 
             meshEdgeSess?.close()
@@ -278,11 +448,649 @@ object HoodPipelineRunner {
             nodeSess.close()
         }
 
-        val output = runOnnx(decoder, clothNodes, longArrayOf(nCloth.toLong(), latent.toLong()))
+        val output = runOnnx(shared.decoder.session, clothNodes, longArrayOf(nCloth.toLong(), latent.toLong()))
         val maxDiff = maxAbsDiff(output, expected)
         val line = "pipeline max_abs_diff=$maxDiff"
         Log.i("HoodOnnxTest", line)
-        return line
+        return FrameRunResult(line, maxDiff)
+    }
+
+    private fun selectModelBase(assets: AssetManager): String {
+        return if (assetExists(assets, "models_dynamic/node_encoder.onnx")) "models_dynamic" else "models_embedded"
+    }
+
+    private fun createSharedSessions(
+        env: OrtEnvironment,
+        assets: AssetManager,
+        filesDir: File,
+        profileDir: File,
+        modelBase: String
+    ): SharedSessions {
+        return SharedSessions(
+            nodeEnc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/node_encoder.onnx", "real/node_encoder"),
+            edgeMeshEnc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_mesh.onnx", "real/edge_encoder_mesh"),
+            edgeWorldEnc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_world.onnx", "real/edge_encoder_world"),
+            edgeCoarse0Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse0.onnx", "real/edge_encoder_coarse0"),
+            edgeCoarse1Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse1.onnx", "real/edge_encoder_coarse1"),
+            edgeCoarse2Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse2.onnx", "real/edge_encoder_coarse2"),
+            decoder = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/node_decoder.onnx", "real/node_decoder")
+        )
+    }
+
+    private fun closeSharedSessions(shared: SharedSessions) {
+        closeProfiledSession(shared.nodeEnc)
+        closeProfiledSession(shared.edgeMeshEnc)
+        closeProfiledSession(shared.edgeWorldEnc)
+        closeProfiledSession(shared.edgeCoarse0Enc)
+        closeProfiledSession(shared.edgeCoarse1Enc)
+        closeProfiledSession(shared.edgeCoarse2Enc)
+        closeProfiledSession(shared.decoder)
+    }
+
+    private fun createRelaxedSession(
+        env: OrtEnvironment,
+        assets: AssetManager,
+        filesDir: File,
+        assetName: String
+    ): OrtSession {
+        val opts = OrtSession.SessionOptions()
+        opts.addNnapi()
+        return env.createSession(copyAssetToFile(assets, filesDir, assetName).absolutePath, opts)
+    }
+
+    private fun buildPreparedInputsLocally(
+        assets: AssetManager,
+        assetBase: String,
+        nCloth: Int,
+        nObs: Int,
+        edgeIndexMesh: IntArray,
+        edgeIndexCoarse0: IntArray,
+        edgeIndexCoarse1: IntArray,
+        edgeIndexCoarse2: IntArray,
+        edgeIndexWorldDirect: IntArray,
+        edgeIndexWorldInverse: IntArray,
+        obstacleActiveMask: IntArray?
+    ): PreparedInputs {
+        val clothPos = readFloatBinary(assets, "$assetBase/cloth_pos.bin")
+        val clothPrevPos = readFloatBinary(assets, "$assetBase/cloth_prev_pos.bin")
+        val clothTargetPos = readFloatBinary(assets, "$assetBase/cloth_target_pos.bin")
+        val clothRestPos = readFloatBinary(assets, "$assetBase/cloth_rest_pos.bin")
+        val clothVertexType = readIntBinary(assets, "$assetBase/cloth_vertex_type.bin")
+        val clothVertexLevel = readIntBinary(assets, "$assetBase/cloth_vertex_level.bin")
+        val clothFaces = readIntBinary(assets, "$assetBase/cloth_faces.bin")
+        val clothLogVMass = readFloatBinary(assets, "$assetBase/cloth_log_v_mass.bin")
+        val clothBending = readFloatBinary(assets, "$assetBase/cloth_bending_coeff_input.bin").first()
+        val clothLameMu = readFloatBinary(assets, "$assetBase/cloth_lame_mu_input.bin").first()
+        val clothLameLambda = readFloatBinary(assets, "$assetBase/cloth_lame_lambda_input.bin").first()
+        val timestep = readFloatBinary(assets, "$assetBase/timestep.bin").first()
+
+        val obstaclePos = readFloatBinary(assets, "$assetBase/obstacle_pos.bin")
+        val obstaclePrevPos = readFloatBinary(assets, "$assetBase/obstacle_prev_pos.bin")
+        val obstacleTargetPos = readFloatBinary(assets, "$assetBase/obstacle_target_pos.bin")
+        val obstacleVertexType = readIntBinary(assets, "$assetBase/obstacle_vertex_type.bin")
+        val obstacleVertexLevel = readIntBinary(assets, "$assetBase/obstacle_vertex_level.bin")
+        val obstacleFaces = readIntBinary(assets, "$assetBase/obstacle_faces.bin")
+
+        val nodeTypeEmbedding = readFloatBinary(assets, "$assetBase/node_type_embedding.bin")
+        val nodeTypeEmbeddingShape = readShape(assets, "$assetBase/node_type_embedding_shape.json")
+        val vertexLevelEmbedding = readFloatBinary(assets, "$assetBase/vertex_level_embedding.bin")
+        val vertexLevelEmbeddingShape = readShape(assets, "$assetBase/vertex_level_embedding_shape.json")
+        val nodeNormMean = readFloatBinary(assets, "$assetBase/node_norm_mean.bin")
+        val nodeNormStd = readFloatBinary(assets, "$assetBase/node_norm_std.bin")
+        val meshNormMean = readFloatBinary(assets, "$assetBase/mesh_norm_mean.bin")
+        val meshNormStd = readFloatBinary(assets, "$assetBase/mesh_norm_std.bin")
+        val worldNormMean = readFloatBinary(assets, "$assetBase/world_norm_mean.bin")
+        val worldNormStd = readFloatBinary(assets, "$assetBase/world_norm_std.bin")
+
+        val clothVelocity = subtractVec3(clothPos, clothPrevPos)
+        applyPinnedVertexUpdate(clothPos, clothPrevPos, clothTargetPos, clothVertexType)
+
+        val clothNormals = computeVertexNormals(clothPos, clothFaces, nCloth)
+        val obstacleNormals = computeVertexNormals(obstaclePos, obstacleFaces, nObs)
+        val obstacleVelocity = subtractVec3(obstaclePos, obstaclePrevPos)
+        val activeMask = obstacleActiveMask ?: IntArray(nObs) { 0 }
+
+        val clothRaw = buildNodeFeatures(
+            numNodes = nCloth,
+            velocity = clothVelocity,
+            vertexType = clothVertexType,
+            vertexLevel = clothVertexLevel,
+            normals = clothNormals,
+            timestep = timestep,
+            logVMass = clothLogVMass,
+            bending = clothBending,
+            lameMu = clothLameMu,
+            lameLambda = clothLameLambda,
+            nodeTypeEmbedding = nodeTypeEmbedding,
+            nodeTypeEmbeddingShape = nodeTypeEmbeddingShape,
+            vertexLevelEmbedding = vertexLevelEmbedding,
+            vertexLevelEmbeddingShape = vertexLevelEmbeddingShape,
+            nodeNormMean = nodeNormMean,
+            nodeNormStd = nodeNormStd,
+            activeMask = null,
+            isObstacle = false
+        )
+        val obstacleRaw = buildNodeFeatures(
+            numNodes = nObs,
+            velocity = obstacleVelocity,
+            vertexType = obstacleVertexType,
+            vertexLevel = obstacleVertexLevel,
+            normals = obstacleNormals,
+            timestep = timestep,
+            logVMass = null,
+            bending = -1f,
+            lameMu = -1f,
+            lameLambda = -1f,
+            nodeTypeEmbedding = nodeTypeEmbedding,
+            nodeTypeEmbeddingShape = nodeTypeEmbeddingShape,
+            vertexLevelEmbedding = vertexLevelEmbedding,
+            vertexLevelEmbeddingShape = vertexLevelEmbeddingShape,
+            nodeNormMean = nodeNormMean,
+            nodeNormStd = nodeNormStd,
+            activeMask = activeMask,
+            isObstacle = true
+        )
+
+        val meshRaw = buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexMesh, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd)
+        val coarse0Raw = buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexCoarse0, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd)
+        val coarse1Raw = buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexCoarse1, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd)
+        val coarse2Raw = buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexCoarse2, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd)
+        val worldDirectRaw = buildWorldEdgeFeaturesObstacleToCloth(obstaclePos, obstacleTargetPos, clothPos, edgeIndexWorldDirect, timestep, worldNormMean, worldNormStd)
+        val worldInverseRaw = buildWorldEdgeFeaturesClothToObstacle(clothPos, obstaclePos, obstacleTargetPos, edgeIndexWorldInverse, timestep, worldNormMean, worldNormStd)
+
+        return PreparedInputs(
+            clothRaw = clothRaw,
+            obstacleRaw = obstacleRaw,
+            meshRaw = meshRaw,
+            coarse0Raw = coarse0Raw,
+            coarse1Raw = coarse1Raw,
+            coarse2Raw = coarse2Raw,
+            worldDirectRaw = worldDirectRaw,
+            worldInverseRaw = worldInverseRaw
+        )
+    }
+
+    private fun logPreparedInputDiffs(
+        assets: AssetManager,
+        assetBase: String,
+        local: PreparedInputs,
+        nCloth: Int,
+        nObs: Int,
+        edgeIndexMesh: IntArray,
+        edgeIndexCoarse0: IntArray,
+        edgeIndexCoarse1: IntArray,
+        edgeIndexCoarse2: IntArray,
+        edgeIndexWorldDirect: IntArray,
+        edgeIndexWorldInverse: IntArray
+    ) {
+        val expClothRaw = readFloatBinary(assets, "$assetBase/cloth_raw.bin")
+        val expObstacleRaw = readFloatBinary(assets, "$assetBase/obstacle_raw.bin")
+        val expMeshRaw = readFloatBinary(assets, "$assetBase/mesh_raw.bin")
+        val expCoarse0Raw = readFloatBinary(assets, "$assetBase/coarse0_raw.bin")
+        val expCoarse1Raw = readFloatBinary(assets, "$assetBase/coarse1_raw.bin")
+        val expCoarse2Raw = readFloatBinary(assets, "$assetBase/coarse2_raw.bin")
+        val expWorldDirectRaw = readFloatBinary(assets, "$assetBase/world_direct_raw.bin")
+        val expWorldInverseRaw = readFloatBinary(assets, "$assetBase/world_inverse_raw.bin")
+
+        Log.i("HoodOnnxTest", "local cloth_raw max_abs_diff=${maxAbsDiff(local.clothRaw, expClothRaw)}")
+        logNodeRawSegments("local cloth_raw", local.clothRaw, expClothRaw, nCloth)
+        Log.i("HoodOnnxTest", "local obstacle_raw max_abs_diff=${maxAbsDiff(local.obstacleRaw, expObstacleRaw)}")
+        logNodeRawSegments("local obstacle_raw", local.obstacleRaw, expObstacleRaw, nObs)
+
+        val meshEdges = edgeIndexMesh.size / 2
+        val coarse0Edges = edgeIndexCoarse0.size / 2
+        val coarse1Edges = edgeIndexCoarse1.size / 2
+        val coarse2Edges = edgeIndexCoarse2.size / 2
+
+        Log.i("HoodOnnxTest", "local mesh_raw max_abs_diff=${maxAbsDiff(local.meshRaw, expMeshRaw)}")
+        logEdgeRawSegments("local mesh_raw", local.meshRaw, expMeshRaw, meshEdges)
+        Log.i("HoodOnnxTest", "local coarse0_raw max_abs_diff=${maxAbsDiff(local.coarse0Raw, expCoarse0Raw)}")
+        logEdgeRawSegments("local coarse0_raw", local.coarse0Raw, expCoarse0Raw, coarse0Edges)
+        Log.i("HoodOnnxTest", "local coarse1_raw max_abs_diff=${maxAbsDiff(local.coarse1Raw, expCoarse1Raw)}")
+        logEdgeRawSegments("local coarse1_raw", local.coarse1Raw, expCoarse1Raw, coarse1Edges)
+        Log.i("HoodOnnxTest", "local coarse2_raw max_abs_diff=${maxAbsDiff(local.coarse2Raw, expCoarse2Raw)}")
+        logEdgeRawSegments("local coarse2_raw", local.coarse2Raw, expCoarse2Raw, coarse2Edges)
+
+        val worldDirectEdges = edgeIndexWorldDirect.size / 2
+        val worldInverseEdges = edgeIndexWorldInverse.size / 2
+        Log.i("HoodOnnxTest", "local world_direct_raw max_abs_diff=${maxAbsDiff(local.worldDirectRaw, expWorldDirectRaw)}")
+        logWorldRawSegments("local world_direct_raw", local.worldDirectRaw, expWorldDirectRaw, worldDirectEdges)
+        Log.i("HoodOnnxTest", "local world_inverse_raw max_abs_diff=${maxAbsDiff(local.worldInverseRaw, expWorldInverseRaw)}")
+        logWorldRawSegments("local world_inverse_raw", local.worldInverseRaw, expWorldInverseRaw, worldInverseEdges)
+    }
+
+    private fun logNodeRawSegments(tag: String, actual: FloatArray, expected: FloatArray, nRows: Int) {
+        Log.i("HoodOnnxTest", "$tag segment velocity max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 24, 0, 3)}")
+        Log.i("HoodOnnxTest", "$tag segment node_type_emb max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 24, 3, 12)}")
+        Log.i("HoodOnnxTest", "$tag segment level_emb max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 24, 12, 16)}")
+        Log.i("HoodOnnxTest", "$tag segment normals max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 24, 16, 19)}")
+        Log.i("HoodOnnxTest", "$tag segment timestep max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 24, 19, 20)}")
+        Log.i("HoodOnnxTest", "$tag segment mass max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 24, 20, 21)}")
+        Log.i("HoodOnnxTest", "$tag segment material max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 24, 21, 24)}")
+    }
+
+    private fun logEdgeRawSegments(tag: String, actual: FloatArray, expected: FloatArray, nRows: Int) {
+        Log.i("HoodOnnxTest", "$tag segment rel_pos max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 12, 0, 3)}")
+        Log.i("HoodOnnxTest", "$tag segment rel_norm max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 12, 3, 4)}")
+        Log.i("HoodOnnxTest", "$tag segment rel_rest_pos max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 12, 4, 7)}")
+        Log.i("HoodOnnxTest", "$tag segment rel_rest_norm max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 12, 7, 8)}")
+        Log.i("HoodOnnxTest", "$tag segment timestep max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 12, 8, 9)}")
+        Log.i("HoodOnnxTest", "$tag segment material max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 12, 9, 12)}")
+    }
+
+    private fun logWorldRawSegments(tag: String, actual: FloatArray, expected: FloatArray, nRows: Int) {
+        Log.i("HoodOnnxTest", "$tag segment rel_pos max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 9, 0, 3)}")
+        Log.i("HoodOnnxTest", "$tag segment rel_norm max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 9, 3, 4)}")
+        Log.i("HoodOnnxTest", "$tag segment rel_next_pos max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 9, 4, 7)}")
+        Log.i("HoodOnnxTest", "$tag segment rel_next_norm max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 9, 7, 8)}")
+        Log.i("HoodOnnxTest", "$tag segment timestep max_abs_diff=${maxAbsDiffColumns(actual, expected, nRows, 9, 8, 9)}")
+    }
+
+    private fun maxAbsDiffColumns(
+        a: FloatArray,
+        b: FloatArray,
+        nRows: Int,
+        rowWidth: Int,
+        colStart: Int,
+        colEnd: Int
+    ): Float {
+        var max = 0f
+        for (row in 0 until nRows) {
+            val base = row * rowWidth
+            for (c in colStart until colEnd) {
+                val d = kotlin.math.abs(a[base + c] - b[base + c])
+                if (d > max) max = d
+            }
+        }
+        return max
+    }
+
+    private fun buildNodeFeatures(
+        numNodes: Int,
+        velocity: FloatArray,
+        vertexType: IntArray,
+        vertexLevel: IntArray,
+        normals: FloatArray,
+        timestep: Float,
+        logVMass: FloatArray?,
+        bending: Float,
+        lameMu: Float,
+        lameLambda: Float,
+        nodeTypeEmbedding: FloatArray,
+        nodeTypeEmbeddingShape: LongArray,
+        vertexLevelEmbedding: FloatArray,
+        vertexLevelEmbeddingShape: LongArray,
+        nodeNormMean: FloatArray,
+        nodeNormStd: FloatArray,
+        activeMask: IntArray?,
+        isObstacle: Boolean
+    ): FloatArray {
+        val typeCols = nodeTypeEmbeddingShape[1].toInt()
+        val levelRows = vertexLevelEmbeddingShape[0].toInt()
+        val levelCols = vertexLevelEmbeddingShape[1].toInt()
+        val raw = FloatArray(numNodes * 24)
+        for (node in 0 until numNodes) {
+            val dst = node * 24
+            val v3 = node * 3
+            raw[dst] = velocity[v3]
+            raw[dst + 1] = velocity[v3 + 1]
+            raw[dst + 2] = velocity[v3 + 2]
+
+            val typeId = vertexType[node]
+            for (c in 0 until typeCols) {
+                raw[dst + 3 + c] = nodeTypeEmbedding[typeId * typeCols + c]
+            }
+
+            val levelId = vertexLevel[node].coerceIn(0, levelRows - 1)
+            for (c in 0 until levelCols) {
+                raw[dst + 12 + c] = vertexLevelEmbedding[levelId * levelCols + c]
+            }
+
+            raw[dst + 16] = normals[v3]
+            raw[dst + 17] = normals[v3 + 1]
+            raw[dst + 18] = normals[v3 + 2]
+            raw[dst + 19] = timestep
+            raw[dst + 20] = if (isObstacle) -1f else logVMass!![node]
+            raw[dst + 21] = bending
+            raw[dst + 22] = lameMu
+            raw[dst + 23] = lameLambda
+        }
+
+        val normalized = raw.copyOf()
+        for (node in 0 until numNodes) {
+            val isActive = activeMask == null || activeMask.getOrElse(node) { 0 } != 0
+            if (!isActive) continue
+            val base = node * 24
+            for (c in 0 until 21) {
+                normalized[base + c] = (raw[base + c] - nodeNormMean[c]) / nodeNormStd[c]
+            }
+        }
+        return normalized
+    }
+
+    private fun buildStaticEdgeFeatures(
+        pos: FloatArray,
+        restPos: FloatArray,
+        edgeIndex: IntArray,
+        timestep: Float,
+        bending: Float,
+        lameMu: Float,
+        lameLambda: Float,
+        normMean: FloatArray,
+        normStd: FloatArray
+    ): FloatArray {
+        val eCount = edgeIndex.size / 2
+        val out = FloatArray(eCount * 12)
+        for (e in 0 until eCount) {
+            val src = edgeIndex[e]
+            val tgt = edgeIndex[e + eCount]
+            val src3 = src * 3
+            val tgt3 = tgt * 3
+            val dst = e * 12
+
+            val rx = pos[src3] - pos[tgt3]
+            val ry = pos[src3 + 1] - pos[tgt3 + 1]
+            val rz = pos[src3 + 2] - pos[tgt3 + 2]
+            val rr = kotlin.math.sqrt(rx * rx + ry * ry + rz * rz)
+
+            val rrx = restPos[src3] - restPos[tgt3]
+            val rry = restPos[src3 + 1] - restPos[tgt3 + 1]
+            val rrz = restPos[src3 + 2] - restPos[tgt3 + 2]
+            val rrr = kotlin.math.sqrt(rrx * rrx + rry * rry + rrz * rrz)
+
+            val pre = floatArrayOf(rx, ry, rz, rr, rrx, rry, rrz, rrr, timestep)
+            for (c in 0 until 9) {
+                out[dst + c] = (pre[c] - normMean[c]) / normStd[c]
+            }
+            out[dst + 9] = bending
+            out[dst + 10] = lameMu
+            out[dst + 11] = lameLambda
+        }
+        return out
+    }
+
+    private fun buildWorldEdgeFeaturesClothToObstacle(
+        clothPos: FloatArray,
+        obstaclePos: FloatArray,
+        obstacleTargetPos: FloatArray,
+        edgeIndex: IntArray,
+        timestep: Float,
+        normMean: FloatArray,
+        normStd: FloatArray
+    ): FloatArray {
+        val eCount = edgeIndex.size / 2
+        val out = FloatArray(eCount * 9)
+        for (e in 0 until eCount) {
+            val src = edgeIndex[e]
+            val tgt = edgeIndex[e + eCount]
+            val clothBase = src * 3
+            val obsBase = tgt * 3
+            val dst = e * 9
+
+            val rx = clothPos[clothBase] - obstaclePos[obsBase]
+            val ry = clothPos[clothBase + 1] - obstaclePos[obsBase + 1]
+            val rz = clothPos[clothBase + 2] - obstaclePos[obsBase + 2]
+            val rr = kotlin.math.sqrt(rx * rx + ry * ry + rz * rz)
+
+            val nx = clothPos[clothBase] - obstacleTargetPos[obsBase]
+            val ny = clothPos[clothBase + 1] - obstacleTargetPos[obsBase + 1]
+            val nz = clothPos[clothBase + 2] - obstacleTargetPos[obsBase + 2]
+            val nr = kotlin.math.sqrt(nx * nx + ny * ny + nz * nz)
+
+            val pre = floatArrayOf(rx, ry, rz, rr, nx, ny, nz, nr, timestep)
+            for (c in 0 until 9) {
+                out[dst + c] = (pre[c] - normMean[c]) / normStd[c]
+            }
+        }
+        return out
+    }
+
+    private fun buildWorldEdgeFeaturesObstacleToCloth(
+        obstaclePos: FloatArray,
+        obstacleTargetPos: FloatArray,
+        clothPos: FloatArray,
+        edgeIndex: IntArray,
+        timestep: Float,
+        normMean: FloatArray,
+        normStd: FloatArray
+    ): FloatArray {
+        val eCount = edgeIndex.size / 2
+        val out = FloatArray(eCount * 9)
+        for (e in 0 until eCount) {
+            val src = edgeIndex[e]
+            val tgt = edgeIndex[e + eCount]
+            val obsBase = src * 3
+            val clothBase = tgt * 3
+            val dst = e * 9
+
+            val rx = obstaclePos[obsBase] - clothPos[clothBase]
+            val ry = obstaclePos[obsBase + 1] - clothPos[clothBase + 1]
+            val rz = obstaclePos[obsBase + 2] - clothPos[clothBase + 2]
+            val rr = kotlin.math.sqrt(rx * rx + ry * ry + rz * rz)
+
+            val nx = obstacleTargetPos[obsBase] - clothPos[clothBase]
+            val ny = obstacleTargetPos[obsBase + 1] - clothPos[clothBase + 1]
+            val nz = obstacleTargetPos[obsBase + 2] - clothPos[clothBase + 2]
+            val nr = kotlin.math.sqrt(nx * nx + ny * ny + nz * nz)
+
+            val pre = floatArrayOf(rx, ry, rz, rr, nx, ny, nz, nr, timestep)
+            for (c in 0 until 9) {
+                out[dst + c] = (pre[c] - normMean[c]) / normStd[c]
+            }
+        }
+        return out
+    }
+
+    private fun subtractVec3(a: FloatArray, b: FloatArray): FloatArray {
+        val out = FloatArray(a.size)
+        for (i in a.indices) out[i] = a[i] - b[i]
+        return out
+    }
+
+    private fun applyPinnedVertexUpdate(
+        pos: FloatArray,
+        prevPos: FloatArray,
+        targetPos: FloatArray,
+        vertexType: IntArray
+    ) {
+        for (node in vertexType.indices) {
+            if (vertexType[node] != 3) continue
+            val base = node * 3
+            prevPos[base] = pos[base]
+            prevPos[base + 1] = pos[base + 1]
+            prevPos[base + 2] = pos[base + 2]
+            pos[base] = targetPos[base]
+            pos[base + 1] = targetPos[base + 1]
+            pos[base + 2] = targetPos[base + 2]
+        }
+    }
+
+    private fun computeVertexNormals(pos: FloatArray, faces: IntArray, numVerts: Int): FloatArray {
+        val out = FloatArray(numVerts * 3)
+        val fCount = faces.size / 3
+        for (f in 0 until fCount) {
+            val i0 = faces[f * 3]
+            val i1 = faces[f * 3 + 1]
+            val i2 = faces[f * 3 + 2]
+
+            val v0x = pos[i0 * 3]
+            val v0y = pos[i0 * 3 + 1]
+            val v0z = pos[i0 * 3 + 2]
+            val v1x = pos[i1 * 3]
+            val v1y = pos[i1 * 3 + 1]
+            val v1z = pos[i1 * 3 + 2]
+            val v2x = pos[i2 * 3]
+            val v2y = pos[i2 * 3 + 1]
+            val v2z = pos[i2 * 3 + 2]
+
+            val e0x = v1x - v0x
+            val e0y = v1y - v0y
+            val e0z = v1z - v0z
+            val e1x = v2x - v1x
+            val e1y = v2y - v1y
+            val e1z = v2z - v1z
+            val e2x = v0x - v2x
+            val e2y = v0y - v2y
+            val e2z = v0z - v2z
+
+            val nx = crossX(e0x, e0y, e0z, e1x, e1y, e1z) +
+                crossX(e1x, e1y, e1z, e2x, e2y, e2z) +
+                crossX(e2x, e2y, e2z, e0x, e0y, e0z)
+            val ny = crossY(e0x, e0y, e0z, e1x, e1y, e1z) +
+                crossY(e1x, e1y, e1z, e2x, e2y, e2z) +
+                crossY(e2x, e2y, e2z, e0x, e0y, e0z)
+            val nz = crossZ(e0x, e0y, e0z, e1x, e1y, e1z) +
+                crossZ(e1x, e1y, e1z, e2x, e2y, e2z) +
+                crossZ(e2x, e2y, e2z, e0x, e0y, e0z)
+
+            accumulate3(out, i0, nx, ny, nz)
+            accumulate3(out, i1, nx, ny, nz)
+            accumulate3(out, i2, nx, ny, nz)
+        }
+        for (v in 0 until numVerts) {
+            val base = v * 3
+            val nx = out[base]
+            val ny = out[base + 1]
+            val nz = out[base + 2]
+            val norm = kotlin.math.sqrt(nx * nx + ny * ny + nz * nz)
+            if (norm > 1e-12f) {
+                out[base] = nx / norm
+                out[base + 1] = ny / norm
+                out[base + 2] = nz / norm
+            }
+        }
+        return out
+    }
+
+    private fun accumulate3(dst: FloatArray, idx: Int, x: Float, y: Float, z: Float) {
+        val base = idx * 3
+        dst[base] += x
+        dst[base + 1] += y
+        dst[base + 2] += z
+    }
+
+    private fun crossX(ax: Float, ay: Float, az: Float, bx: Float, by: Float, bz: Float): Float = ay * bz - az * by
+    private fun crossY(ax: Float, ay: Float, az: Float, bx: Float, by: Float, bz: Float): Float = az * bx - ax * bz
+    private fun crossZ(ax: Float, ay: Float, az: Float, bx: Float, by: Float, bz: Float): Float = ax * by - ay * bx
+
+    private fun createProfiledSession(
+        env: OrtEnvironment,
+        assets: AssetManager,
+        filesDir: File,
+        profileDir: File,
+        assetName: String,
+        label: String
+    ): ProfiledSession {
+        val opts = OrtSession.SessionOptions()
+        opts.addNnapi()
+        opts.setSessionLogLevel(OrtLoggingLevel.ORT_LOGGING_LEVEL_WARNING)
+        val profileFile = File(profileDir, "ort_profile_${label.replace('/', '_')}.json")
+        opts.enableProfiling(profileFile.absolutePath)
+        val session = env.createSession(copyAssetToFile(assets, filesDir, assetName).absolutePath, opts)
+        return ProfiledSession(label, session)
+    }
+
+    private fun closeProfiledSession(profiled: ProfiledSession) {
+        try {
+            val profilePath = profiled.session.endProfiling()
+            Log.i("HoodOnnxTest", "${profiled.label} ${summarizeProfile(profilePath)}")
+        } catch (t: Throwable) {
+            Log.w("HoodOnnxTest", "${profiled.label} profile summary failed", t)
+        } finally {
+            profiled.session.close()
+        }
+    }
+
+    private fun buildDefaultProcessSteps(blocks: JSONArray): JSONArray {
+        val arr = JSONArray()
+        for (i in 0 until blocks.length()) {
+            val blk = blocks.getJSONObject(i)
+            val step = JSONObject()
+            step.put("type", "block")
+            step.put("level", blk.getInt("level"))
+            step.put("block", blk.getInt("block"))
+            step.put("edge_keys", blk.getJSONArray("edge_keys"))
+            arr.put(step)
+        }
+        return arr
+    }
+
+    private fun computeRemainingNodeMask(
+        targetEdgeKeys: JSONArray,
+        nCloth: Int,
+        edgeIndexMesh: IntArray,
+        edgeIndexCoarse0: IntArray,
+        edgeIndexCoarse1: IntArray,
+        edgeIndexCoarse2: IntArray
+    ): BooleanArray {
+        val mask = BooleanArray(nCloth)
+        for (i in 0 until targetEdgeKeys.length()) {
+            val edgeIndex = when (targetEdgeKeys.getString(i)) {
+                "mesh_edge" -> edgeIndexMesh
+                "coarse_edge0" -> edgeIndexCoarse0
+                "coarse_edge1" -> edgeIndexCoarse1
+                "coarse_edge2" -> edgeIndexCoarse2
+                else -> null
+            } ?: continue
+            val eCount = edgeIndex.size / 2
+            for (e in 0 until eCount) {
+                mask[edgeIndex[e]] = true
+                mask[edgeIndex[e + eCount]] = true
+            }
+        }
+        return mask
+    }
+
+    private fun filterWorldEdges(
+        edgeIndex: IntArray,
+        edgeFeatures: FloatArray,
+        remainingMask: BooleanArray,
+        latent: Int,
+        useSourceMask: Boolean,
+        useTargetMask: Boolean
+    ): Triple<IntArray, FloatArray, EdgeStash> {
+        val eCount = edgeIndex.size / 2
+        val mask = BooleanArray(eCount)
+        var kept = 0
+        for (e in 0 until eCount) {
+            val src = edgeIndex[e]
+            val tgt = edgeIndex[e + eCount]
+            var keep = true
+            if (useSourceMask) keep = keep && remainingMask[src]
+            if (useTargetMask) keep = keep && remainingMask[tgt]
+            mask[e] = keep
+            if (keep) kept++
+        }
+
+        val newIndex = IntArray(kept * 2)
+        val newFeatures = FloatArray(kept * latent)
+        var j = 0
+        for (e in 0 until eCount) {
+            if (!mask[e]) continue
+            newIndex[j] = edgeIndex[e]
+            newIndex[j + kept] = edgeIndex[e + eCount]
+            System.arraycopy(edgeFeatures, e * latent, newFeatures, j * latent, latent)
+            j++
+        }
+
+        val stash = EdgeStash(edgeIndex.copyOf(), edgeFeatures.copyOf(), mask)
+        return Triple(newIndex, newFeatures, stash)
+    }
+
+    private fun restoreWorldEdges(
+        stash: EdgeStash,
+        currentFeatures: FloatArray,
+        latent: Int
+    ): Pair<IntArray, FloatArray> {
+        val restored = stash.oldFeatures.copyOf()
+        val eCount = stash.oldIndex.size / 2
+        var currentEdge = 0
+        for (e in 0 until eCount) {
+            if (!stash.mask[e]) continue
+            System.arraycopy(currentFeatures, currentEdge * latent, restored, e * latent, latent)
+            currentEdge++
+        }
+        return Pair(stash.oldIndex.copyOf(), restored)
     }
 
     private fun runEdgeMlp(
@@ -291,25 +1099,34 @@ object HoodPipelineRunner {
         srcNodes: FloatArray,
         edgeFeat: FloatArray,
         edgeIndex: IntArray,
-        eBlock: Int,
         latent: Int
     ): FloatArray {
-        val input = FloatArray(eBlock * latent * 3)
-        var e = 0
-        while (e < eBlock) {
-            val src = edgeIndex[e]
-            val tgt = edgeIndex[e + eBlock]
-            val inBase = e * latent * 3
-            val tgtBase = tgt * latent
-            val srcBase = src * latent
-            val edgeBase = e * latent
-            System.arraycopy(tgtNodes, tgtBase, input, inBase, latent)
-            System.arraycopy(srcNodes, srcBase, input, inBase + latent, latent)
-            System.arraycopy(edgeFeat, edgeBase, input, inBase + latent * 2, latent)
-            e++
+        val eCount = edgeIndex.size / 2
+        val output = FloatArray(eCount * latent)
+        var edgeStart = 0
+        while (edgeStart < eCount) {
+            val chunkEdges = minOf(EDGE_MLP_CHUNK_EDGES, eCount - edgeStart)
+            val input = FloatArray(chunkEdges * latent * 3)
+            var localEdge = 0
+            while (localEdge < chunkEdges) {
+                val edge = edgeStart + localEdge
+                val src = edgeIndex[edge]
+                val tgt = edgeIndex[edge + eCount]
+                val inBase = localEdge * latent * 3
+                val tgtBase = tgt * latent
+                val srcBase = src * latent
+                val edgeBase = edge * latent
+                System.arraycopy(tgtNodes, tgtBase, input, inBase, latent)
+                System.arraycopy(srcNodes, srcBase, input, inBase + latent, latent)
+                System.arraycopy(edgeFeat, edgeBase, input, inBase + latent * 2, latent)
+                localEdge++
+            }
+            val shape = longArrayOf(chunkEdges.toLong(), (latent * 3).toLong())
+            val chunkOut = runOnnx(session, input, shape)
+            System.arraycopy(chunkOut, 0, output, edgeStart * latent, chunkOut.size)
+            edgeStart += chunkEdges
         }
-        val shape = longArrayOf(eBlock.toLong(), (latent * 3).toLong())
-        return runOnnx(session, input, shape)
+        return output
     }
 
     private fun concatNodeInputs(
@@ -433,6 +1250,14 @@ object HoodPipelineRunner {
         return out
     }
 
+    private fun readIntBinarySafe(assets: AssetManager, name: String): IntArray? {
+        return try {
+            readIntBinary(assets, name)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun assetExists(assets: AssetManager, name: String): Boolean {
         return try {
             assets.open(name).close()
@@ -503,5 +1328,36 @@ object HoodPipelineRunner {
             // no external data
         }
         return outFile
+    }
+
+    private fun summarizeProfile(profilePath: String): String {
+        return try {
+            val text = File(profilePath).readText()
+            val arr = JSONArray(text)
+            val providerCounts = mutableMapOf<String, Int>()
+            val cpuOps = mutableSetOf<String>()
+            val nnapiOps = mutableSetOf<String>()
+
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                if (obj.optString("cat") != "Node") continue
+                val args = obj.optJSONObject("args") ?: continue
+                val opName = args.optString("op_name", "")
+                val provider = args.optString("provider", "")
+                if (opName.isEmpty() || provider.isEmpty()) continue
+                providerCounts[provider] = (providerCounts[provider] ?: 0) + 1
+                if (provider.contains("CPU")) cpuOps.add(opName)
+                if (provider.contains("Nnapi")) nnapiOps.add(opName)
+            }
+
+            val providerSummary = providerCounts.entries
+                .sortedByDescending { it.value }
+                .joinToString(", ") { "${it.key}=${it.value}" }
+            val nnapiList = nnapiOps.toList().sorted().joinToString(", ")
+            val cpuList = cpuOps.toList().sorted().joinToString(", ")
+            "providers: $providerSummary; NNAPI ops: [$nnapiList]; CPU ops: [$cpuList]"
+        } catch (t: Throwable) {
+            "profile summary failed: ${t.message}"
+        }
     }
 }

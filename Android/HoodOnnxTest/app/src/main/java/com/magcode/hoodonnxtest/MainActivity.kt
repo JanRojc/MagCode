@@ -65,7 +65,8 @@ class MainActivity : Activity() {
             reportLines.add("")
         }
 
-        val pipelineLine = HoodPipelineRunner.run(assets, filesDir, env, opts)
+        val pipelineProfileDir = getExternalFilesDir(null) ?: filesDir
+        val pipelineLine = HoodPipelineRunner.run(assets, filesDir, env, pipelineProfileDir)
         reportLines.add(pipelineLine)
         reportLines.add("")
 

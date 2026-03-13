@@ -54,9 +54,21 @@ def replace_layernorm(module: torch.nn.Module) -> torch.nn.Module:
     return module
 
 
-def _export_module(module: torch.nn.Module, dummy_input: torch.Tensor, out_path: Path, opset: int) -> None:
+def _export_module(
+    module: torch.nn.Module,
+    dummy_input: torch.Tensor,
+    out_path: Path,
+    opset: int,
+    dynamic_batch: bool = False,
+) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     module.eval()
+    dynamic_axes = None
+    if dynamic_batch:
+        dynamic_axes = {
+            "input": {0: "batch"},
+            "output": {0: "batch"},
+        }
     torch.onnx.export(
         module,
         dummy_input,
@@ -65,6 +77,7 @@ def _export_module(module: torch.nn.Module, dummy_input: torch.Tensor, out_path:
         output_names=["output"],
         opset_version=opset,
         do_constant_folding=True,
+        dynamic_axes=dynamic_axes,
     )
 
 
@@ -104,31 +117,32 @@ def export_mlps(
     learned,
     out_dir: Path,
     opset: int,
+    dynamic_batch: bool = False,
 ) -> Dict[str, str]:
     exported = {}
 
     # Node encoder / decoder
     dummy_nodes = torch.randn(8, learned.n_nodefeatures)
-    _export_module(learned.node_encoder, dummy_nodes, out_dir / "node_encoder.onnx", opset)
+    _export_module(learned.node_encoder, dummy_nodes, out_dir / "node_encoder.onnx", opset, dynamic_batch=dynamic_batch)
     exported["node_encoder"] = "node_encoder.onnx"
 
     dummy_latents = torch.randn(8, learned._latent_size)
-    _export_module(learned.decoder, dummy_latents, out_dir / "node_decoder.onnx", opset)
+    _export_module(learned.decoder, dummy_latents, out_dir / "node_decoder.onnx", opset, dynamic_batch=dynamic_batch)
     exported["node_decoder"] = "node_decoder.onnx"
 
     # Edge encoders
     dummy_mesh = torch.randn(16, learned.n_edgefeatures_mesh)
-    _export_module(learned.edgeset_encoders["mesh"], dummy_mesh, out_dir / "edge_encoder_mesh.onnx", opset)
+    _export_module(learned.edgeset_encoders["mesh"], dummy_mesh, out_dir / "edge_encoder_mesh.onnx", opset, dynamic_batch=dynamic_batch)
     exported["edge_encoder_mesh"] = "edge_encoder_mesh.onnx"
 
     dummy_world = torch.randn(16, learned.n_edgefeatures_world)
-    _export_module(learned.edgeset_encoders["world"], dummy_world, out_dir / "edge_encoder_world.onnx", opset)
+    _export_module(learned.edgeset_encoders["world"], dummy_world, out_dir / "edge_encoder_world.onnx", opset, dynamic_batch=dynamic_batch)
     exported["edge_encoder_world"] = "edge_encoder_world.onnx"
 
     for i in range(learned._n_coarse_levels):
         dummy_coarse = torch.randn(16, learned.n_edgefeatures_coarse)
         name = f"edge_encoder_coarse{i}.onnx"
-        _export_module(learned.edgeset_encoders[f"coarse{i}"], dummy_coarse, out_dir / name, opset)
+        _export_module(learned.edgeset_encoders[f"coarse{i}"], dummy_coarse, out_dir / name, opset, dynamic_batch=dynamic_batch)
         exported[f"edge_encoder_coarse{i}"] = name
 
     # Per-block edge and node processors
@@ -138,7 +152,7 @@ def export_mlps(
             for edge_key, edge_mlp in block.edge_processor_dict.items():
                 dummy_edge = torch.randn(8, learned._latent_size * 3)
                 name = f"block_{level_idx}_{block_idx}_edge_{edge_key}.onnx"
-                _export_module(edge_mlp, dummy_edge, out_dir / "blocks" / name, opset)
+                _export_module(edge_mlp, dummy_edge, out_dir / "blocks" / name, opset, dynamic_batch=dynamic_batch)
                 exported[f"block_{level_idx}_{block_idx}_edge_{edge_key}"] = f"blocks/{name}"
 
             # Node processor (single)
@@ -147,7 +161,7 @@ def export_mlps(
             dummy_node = torch.randn(8, learned._latent_size * (1 + num_edgesets))
             node_mlp = block.node_processor_dict["node"]
             name = f"block_{level_idx}_{block_idx}_node.onnx"
-            _export_module(node_mlp, dummy_node, out_dir / "blocks" / name, opset)
+            _export_module(node_mlp, dummy_node, out_dir / "blocks" / name, opset, dynamic_batch=dynamic_batch)
             exported[f"block_{level_idx}_{block_idx}_node"] = f"blocks/{name}"
 
     return exported
@@ -209,6 +223,7 @@ def main():
     parser.add_argument("--export-full", action="store_true")
     parser.add_argument("--validate", action="store_true")
     parser.add_argument("--rewrite-layernorm", action="store_true", help="Replace LayerNorm with primitive ops before export")
+    parser.add_argument("--dynamic-batch", action="store_true", help="Export all MLPs with dynamic batch axis")
     parser.add_argument("--data-root", default=None)
     parser.add_argument("--aux-data", default=None)
     parser.add_argument("--project-dir", default=None)
@@ -230,7 +245,7 @@ def main():
     hood, model, learned = _get_model_and_learned(args.config, args.checkpoint, args.device, defaults, args.rewrite_layernorm)
 
     _dump_metadata(out_dir, model, learned)
-    exported = export_mlps(model, learned, out_dir, args.opset)
+    exported = export_mlps(model, learned, out_dir, args.opset, dynamic_batch=args.dynamic_batch)
     (out_dir / "exports.json").write_text(json.dumps(exported, indent=2))
 
     if args.validate:
