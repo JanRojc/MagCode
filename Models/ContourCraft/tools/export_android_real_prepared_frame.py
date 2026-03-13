@@ -203,6 +203,8 @@ def main() -> None:
         "N_obstacle": int(prepared["obstacle"].node_features.shape[0]),
         "latent_size": int(learned._latent_size),
         "output_size": int(learned._output_size),
+        "collision_radius": float(model.collision_radius),
+        "k_world_edges": None if model.k_world_edges is None else int(model.k_world_edges),
         "blocks": blocks_cfg,
         "process_steps": process_steps,
     }

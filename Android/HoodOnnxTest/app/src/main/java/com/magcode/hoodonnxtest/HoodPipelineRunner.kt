@@ -54,7 +54,10 @@ object HoodPipelineRunner {
         val coarse1Raw: FloatArray,
         val coarse2Raw: FloatArray,
         val worldDirectRaw: FloatArray,
-        val worldInverseRaw: FloatArray
+        val worldInverseRaw: FloatArray,
+        val worldDirectIndex: IntArray,
+        val worldInverseIndex: IntArray,
+        val obstacleActiveMask: IntArray
     )
 
     fun run(
@@ -138,10 +141,16 @@ object HoodPipelineRunner {
         val nCloth = config.getInt("N_cloth")
         val nObs = config.getInt("N_obstacle")
         val latent = config.getInt("latent_size")
+        val collisionRadius = config.optDouble("collision_radius", 3e-2).toFloat()
+        val kWorldEdges = if (config.has("k_world_edges") && !config.isNull("k_world_edges")) {
+            config.getInt("k_world_edges")
+        } else {
+            1
+        }
         val blocks = config.getJSONArray("blocks")
         val processSteps = config.optJSONArray("process_steps")
 
-        val obstacleActiveMask = readIntBinarySafe(assets, "$assetBase/obstacle_active_mask.bin")
+        val obstacleActiveMaskRef = readIntBinarySafe(assets, "$assetBase/obstacle_active_mask.bin")
 
         val edgeIndexMesh = readIntBinary(assets, "$assetBase/edge_index_mesh.bin")
         val edgeIndexCoarse0 = readIntBinary(assets, "$assetBase/edge_index_coarse0.bin")
@@ -161,9 +170,8 @@ object HoodPipelineRunner {
                 edgeIndexCoarse0,
                 edgeIndexCoarse1,
                 edgeIndexCoarse2,
-                edgeIndexWorldDirect,
-                edgeIndexWorldInverse,
-                obstacleActiveMask
+                collisionRadius,
+                kWorldEdges
             )
         } else {
             PreparedInputs(
@@ -174,13 +182,31 @@ object HoodPipelineRunner {
                 coarse1Raw = readFloatBinary(assets, "$assetBase/coarse1_raw.bin"),
                 coarse2Raw = readFloatBinary(assets, "$assetBase/coarse2_raw.bin"),
                 worldDirectRaw = readFloatBinary(assets, "$assetBase/world_direct_raw.bin"),
-                worldInverseRaw = readFloatBinary(assets, "$assetBase/world_inverse_raw.bin")
+                worldInverseRaw = readFloatBinary(assets, "$assetBase/world_inverse_raw.bin"),
+                worldDirectIndex = edgeIndexWorldDirect,
+                worldInverseIndex = edgeIndexWorldInverse,
+                obstacleActiveMask = obstacleActiveMaskRef ?: IntArray(nObs) { 0 }
             )
         }
+        edgeIndexWorldDirect = preparedInputs.worldDirectIndex
+        edgeIndexWorldInverse = preparedInputs.worldInverseIndex
         if (usesLocalPreparedInputs) {
             Log.i("HoodOnnxTest", "using local node/static-edge feature construction for $assetBase")
             if (logIntermediate) {
-                logPreparedInputDiffs(assets, assetBase, preparedInputs, nCloth, nObs, edgeIndexMesh, edgeIndexCoarse0, edgeIndexCoarse1, edgeIndexCoarse2, edgeIndexWorldDirect, edgeIndexWorldInverse)
+                logPreparedInputDiffs(
+                    assets,
+                    assetBase,
+                    preparedInputs,
+                    nCloth,
+                    nObs,
+                    edgeIndexMesh,
+                    edgeIndexCoarse0,
+                    edgeIndexCoarse1,
+                    edgeIndexCoarse2,
+                    readIntBinary(assets, "$assetBase/edge_index_world_direct.bin"),
+                    readIntBinary(assets, "$assetBase/edge_index_world_inverse.bin"),
+                    obstacleActiveMaskRef
+                )
             }
         }
 
@@ -224,7 +250,7 @@ object HoodPipelineRunner {
         val shapeWorldCat = longArrayOf(shapeWorldDirectRaw[0] + shapeWorldInverseRaw[0], shapeWorldDirectRaw[1])
 
         val nodeFeatureDim = shapeClothRaw[1].toInt()
-        val activeMask = obstacleActiveMask ?: IntArray(nObs) { 0 }
+        val activeMask = preparedInputs.obstacleActiveMask
         val nActiveObs = activeMask.count { it != 0 }
         val combinedNodeRaw = FloatArray((nCloth + nActiveObs) * nodeFeatureDim)
         System.arraycopy(clothRaw, 0, combinedNodeRaw, 0, clothRaw.size)
@@ -507,9 +533,8 @@ object HoodPipelineRunner {
         edgeIndexCoarse0: IntArray,
         edgeIndexCoarse1: IntArray,
         edgeIndexCoarse2: IntArray,
-        edgeIndexWorldDirect: IntArray,
-        edgeIndexWorldInverse: IntArray,
-        obstacleActiveMask: IntArray?
+        collisionRadius: Float,
+        kWorldEdges: Int?
     ): PreparedInputs {
         val clothPos = readFloatBinary(assets, "$assetBase/cloth_pos.bin")
         val clothPrevPos = readFloatBinary(assets, "$assetBase/cloth_prev_pos.bin")
@@ -544,11 +569,14 @@ object HoodPipelineRunner {
 
         val clothVelocity = subtractVec3(clothPos, clothPrevPos)
         applyPinnedVertexUpdate(clothPos, clothPrevPos, clothTargetPos, clothVertexType)
+        val worldConnectivity = computeWorldEdgeConnectivity(clothPos, obstaclePos, obstacleVertexType, collisionRadius, kWorldEdges)
+        val edgeIndexWorldInverse = worldConnectivity.first
+        val edgeIndexWorldDirect = worldConnectivity.second
+        val activeMask = worldConnectivity.third
 
         val clothNormals = computeVertexNormals(clothPos, clothFaces, nCloth)
         val obstacleNormals = computeVertexNormals(obstaclePos, obstacleFaces, nObs)
         val obstacleVelocity = subtractVec3(obstaclePos, obstaclePrevPos)
-        val activeMask = obstacleActiveMask ?: IntArray(nObs) { 0 }
 
         val clothRaw = buildNodeFeatures(
             numNodes = nCloth,
@@ -606,7 +634,10 @@ object HoodPipelineRunner {
             coarse1Raw = coarse1Raw,
             coarse2Raw = coarse2Raw,
             worldDirectRaw = worldDirectRaw,
-            worldInverseRaw = worldInverseRaw
+            worldInverseRaw = worldInverseRaw,
+            worldDirectIndex = edgeIndexWorldDirect,
+            worldInverseIndex = edgeIndexWorldInverse,
+            obstacleActiveMask = activeMask
         )
     }
 
@@ -621,7 +652,8 @@ object HoodPipelineRunner {
         edgeIndexCoarse1: IntArray,
         edgeIndexCoarse2: IntArray,
         edgeIndexWorldDirect: IntArray,
-        edgeIndexWorldInverse: IntArray
+        edgeIndexWorldInverse: IntArray,
+        obstacleActiveMaskRef: IntArray?
     ) {
         val expClothRaw = readFloatBinary(assets, "$assetBase/cloth_raw.bin")
         val expObstacleRaw = readFloatBinary(assets, "$assetBase/obstacle_raw.bin")
@@ -653,6 +685,11 @@ object HoodPipelineRunner {
 
         val worldDirectEdges = edgeIndexWorldDirect.size / 2
         val worldInverseEdges = edgeIndexWorldInverse.size / 2
+        Log.i("HoodOnnxTest", "local edge_index_world_direct max_abs_diff=${maxAbsDiff(local.worldDirectIndex.map { it.toFloat() }.toFloatArray(), edgeIndexWorldDirect.map { it.toFloat() }.toFloatArray())}")
+        Log.i("HoodOnnxTest", "local edge_index_world_inverse max_abs_diff=${maxAbsDiff(local.worldInverseIndex.map { it.toFloat() }.toFloatArray(), edgeIndexWorldInverse.map { it.toFloat() }.toFloatArray())}")
+        if (obstacleActiveMaskRef != null) {
+            Log.i("HoodOnnxTest", "local obstacle_active_mask max_abs_diff=${maxAbsDiff(local.obstacleActiveMask.map { it.toFloat() }.toFloatArray(), obstacleActiveMaskRef.map { it.toFloat() }.toFloatArray())}")
+        }
         Log.i("HoodOnnxTest", "local world_direct_raw max_abs_diff=${maxAbsDiff(local.worldDirectRaw, expWorldDirectRaw)}")
         logWorldRawSegments("local world_direct_raw", local.worldDirectRaw, expWorldDirectRaw, worldDirectEdges)
         Log.i("HoodOnnxTest", "local world_inverse_raw max_abs_diff=${maxAbsDiff(local.worldInverseRaw, expWorldInverseRaw)}")
@@ -879,6 +916,98 @@ object HoodPipelineRunner {
             }
         }
         return out
+    }
+
+    private fun computeWorldEdgeConnectivity(
+        clothPos: FloatArray,
+        obstaclePos: FloatArray,
+        obstacleVertexType: IntArray,
+        collisionRadius: Float,
+        kWorldEdges: Int?
+    ): Triple<IntArray, IntArray, IntArray> {
+        val nCloth = clothPos.size / 3
+        val nObstacle = obstaclePos.size / 3
+        val radiusSq = collisionRadius * collisionRadius
+        val limit = kWorldEdges ?: Int.MAX_VALUE
+
+        val clothToObstacleSrc = ArrayList<Int>()
+        val clothToObstacleTgt = ArrayList<Int>()
+        val activeMask = IntArray(nObstacle)
+
+        for (clothIdx in 0 until nCloth) {
+            val cx = clothPos[clothIdx * 3]
+            val cy = clothPos[clothIdx * 3 + 1]
+            val cz = clothPos[clothIdx * 3 + 2]
+
+            if (limit <= 1) {
+                var bestObs = -1
+                var bestDist = Float.POSITIVE_INFINITY
+                for (obsIdx in 0 until nObstacle) {
+                    val ox = obstaclePos[obsIdx * 3]
+                    val oy = obstaclePos[obsIdx * 3 + 1]
+                    val oz = obstaclePos[obsIdx * 3 + 2]
+                    val dx = cx - ox
+                    val dy = cy - oy
+                    val dz = cz - oz
+                    val dist = dx * dx + dy * dy + dz * dz
+                    if (dist < bestDist) {
+                        bestDist = dist
+                        bestObs = obsIdx
+                    }
+                }
+                if (bestObs >= 0 && bestDist <= radiusSq && obstacleVertexType[bestObs] != 2) {
+                    clothToObstacleSrc.add(clothIdx)
+                    clothToObstacleTgt.add(bestObs)
+                    activeMask[bestObs] = 1
+                }
+                continue
+            }
+
+            val bestIdx = IntArray(limit) { -1 }
+            val bestDist = FloatArray(limit) { Float.POSITIVE_INFINITY }
+            for (obsIdx in 0 until nObstacle) {
+                val ox = obstaclePos[obsIdx * 3]
+                val oy = obstaclePos[obsIdx * 3 + 1]
+                val oz = obstaclePos[obsIdx * 3 + 2]
+                val dx = cx - ox
+                val dy = cy - oy
+                val dz = cz - oz
+                val dist = dx * dx + dy * dy + dz * dz
+                for (slot in 0 until limit) {
+                    if (dist < bestDist[slot]) {
+                        for (move in limit - 1 downTo slot + 1) {
+                            bestDist[move] = bestDist[move - 1]
+                            bestIdx[move] = bestIdx[move - 1]
+                        }
+                        bestDist[slot] = dist
+                        bestIdx[slot] = obsIdx
+                        break
+                    }
+                }
+            }
+            for (slot in 0 until limit) {
+                val obsIdx = bestIdx[slot]
+                if (obsIdx < 0) continue
+                if (bestDist[slot] > radiusSq) continue
+                if (obstacleVertexType[obsIdx] == 2) continue
+                clothToObstacleSrc.add(clothIdx)
+                clothToObstacleTgt.add(obsIdx)
+                activeMask[obsIdx] = 1
+            }
+        }
+
+        val eCount = clothToObstacleSrc.size
+        val inverse = IntArray(eCount * 2)
+        val direct = IntArray(eCount * 2)
+        for (e in 0 until eCount) {
+            val clothIdx = clothToObstacleSrc[e]
+            val obsIdx = clothToObstacleTgt[e]
+            inverse[e] = clothIdx
+            inverse[e + eCount] = obsIdx
+            direct[e] = obsIdx
+            direct[e + eCount] = clothIdx
+        }
+        return Triple(inverse, direct, activeMask)
     }
 
     private fun subtractVec3(a: FloatArray, b: FloatArray): FloatArray {
