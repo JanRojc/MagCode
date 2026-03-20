@@ -1,6 +1,7 @@
 package com.magcode.hoodonnxtest
 
 import android.content.res.AssetManager
+import android.system.Os
 import android.util.Log
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
@@ -14,6 +15,10 @@ import java.nio.ByteOrder
 
 object HoodPipelineRunner {
     private const val EDGE_MLP_CHUNK_EDGES = 4096
+    private const val ENABLE_QNN = false
+    private const val ENABLE_GPU_NODE_ENCODER = false
+    private const val ENABLE_NATIVE_BLOCK_NODE_MLP = false
+    private const val ENABLE_DUMMY_MODEL_SET = false
 
     private data class ProfiledSession(
         val label: String,
@@ -27,7 +32,19 @@ object HoodPipelineRunner {
         val edgeCoarse0Enc: ProfiledSession,
         val edgeCoarse1Enc: ProfiledSession,
         val edgeCoarse2Enc: ProfiledSession,
-        val decoder: ProfiledSession
+        val decoder: ProfiledSession,
+        val gpuNodeEncoder: GpuNodeEncoder? = null,
+        val nativeBlockNodeMlpReady: Boolean = false,
+        val blockSessions: MutableMap<String, BlockSessions> = linkedMapOf()
+    )
+
+    private data class BlockSessions(
+        val node: ProfiledSession,
+        val world: ProfiledSession,
+        val mesh: ProfiledSession?,
+        val coarse0: ProfiledSession?,
+        val coarse1: ProfiledSession?,
+        val coarse2: ProfiledSession?
     )
 
     private data class EdgeStash(
@@ -46,6 +63,27 @@ object HoodPipelineRunner {
         val maxDiff: Float
     )
 
+    private class StageTimer {
+        private val totalsNs = linkedMapOf<String, Long>()
+
+        fun <T> measure(name: String, block: () -> T): T {
+            val start = System.nanoTime()
+            try {
+                return block()
+            } finally {
+                val dur = System.nanoTime() - start
+                totalsNs[name] = (totalsNs[name] ?: 0L) + dur
+            }
+        }
+
+        fun summary(prefix: String): String {
+            return totalsNs.entries.joinToString(separator = ", ") { entry ->
+                val ms = entry.value / 1_000_000.0
+                "$prefix${entry.key}=${"%.2f".format(ms)}ms"
+            }
+        }
+    }
+
     private data class PreparedInputs(
         val clothRaw: FloatArray,
         val obstacleRaw: FloatArray,
@@ -63,26 +101,28 @@ object HoodPipelineRunner {
     fun run(
         assets: AssetManager,
         filesDir: File,
+        nativeLibraryDir: String,
         env: OrtEnvironment,
         profileDir: File
     ): String {
         return when {
-            assetExists(assets, "pipeline_real_sequence/config.json") -> runSequence(assets, filesDir, env, profileDir)
-            assetExists(assets, "pipeline_real/config.json") -> runSingle(assets, filesDir, env, profileDir, "pipeline_real", logIntermediate = true)
-            else -> runSingle(assets, filesDir, env, profileDir, "pipeline", logIntermediate = true)
+            assetExists(assets, "pipeline_real_sequence/config.json") -> runSequence(assets, filesDir, nativeLibraryDir, env, profileDir)
+            assetExists(assets, "pipeline_real/config.json") -> runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, "pipeline_real", logIntermediate = true)
+            else -> runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, "pipeline", logIntermediate = true)
         }
     }
 
     private fun runSequence(
         assets: AssetManager,
         filesDir: File,
+        nativeLibraryDir: String,
         env: OrtEnvironment,
         profileDir: File
     ): String {
         val config = readJsonObject(assets, "pipeline_real_sequence/config.json")
         val frames = config.getJSONArray("frames")
         val modelBase = selectModelBase(assets)
-        val sessions = createSharedSessions(env, assets, filesDir, profileDir, modelBase)
+        val sessions = createSharedSessions(env, assets, filesDir, nativeLibraryDir, profileDir, modelBase)
         val lines = mutableListOf<String>()
         var maxDiffAll = 0f
         try {
@@ -90,7 +130,7 @@ object HoodPipelineRunner {
                 val frame = frames.getJSONObject(i)
                 val frameIdx = frame.getInt("frame_idx")
                 val assetBase = frame.getString("asset_base")
-                val result = runFrame(assets, filesDir, env, assetBase, modelBase, sessions, logIntermediate = i == 0)
+                val result = runFrame(assets, filesDir, nativeLibraryDir, env, profileDir, assetBase, modelBase, sessions, logIntermediate = i == 0)
                 if (result.maxDiff > maxDiffAll) maxDiffAll = result.maxDiff
                 val line = "sequence frame=$frameIdx ${result.line}"
                 lines.add(line)
@@ -114,15 +154,16 @@ object HoodPipelineRunner {
     private fun runSingle(
         assets: AssetManager,
         filesDir: File,
+        nativeLibraryDir: String,
         env: OrtEnvironment,
         profileDir: File,
         assetBase: String,
         logIntermediate: Boolean
     ): String {
         val modelBase = selectModelBase(assets)
-        val sessions = createSharedSessions(env, assets, filesDir, profileDir, modelBase)
+        val sessions = createSharedSessions(env, assets, filesDir, nativeLibraryDir, profileDir, modelBase)
         return try {
-            runFrame(assets, filesDir, env, assetBase, modelBase, sessions, logIntermediate).line
+            runFrame(assets, filesDir, nativeLibraryDir, env, profileDir, assetBase, modelBase, sessions, logIntermediate).line
         } finally {
             closeSharedSessions(sessions)
         }
@@ -131,12 +172,15 @@ object HoodPipelineRunner {
     private fun runFrame(
         assets: AssetManager,
         filesDir: File,
+        nativeLibraryDir: String,
         env: OrtEnvironment,
+        profileDir: File,
         assetBase: String,
         modelBase: String,
         shared: SharedSessions,
         logIntermediate: Boolean
     ): FrameRunResult {
+        val timer = StageTimer()
         val config = readJsonObject(assets, "$assetBase/config.json")
         val nCloth = config.getInt("N_cloth")
         val nObs = config.getInt("N_obstacle")
@@ -161,18 +205,21 @@ object HoodPipelineRunner {
 
         val usesLocalPreparedInputs = assetExists(assets, "$assetBase/node_norm_mean.bin")
         val preparedInputs = if (usesLocalPreparedInputs) {
-            buildPreparedInputsLocally(
-                assets,
-                assetBase,
-                nCloth,
-                nObs,
-                edgeIndexMesh,
-                edgeIndexCoarse0,
-                edgeIndexCoarse1,
-                edgeIndexCoarse2,
-                collisionRadius,
-                kWorldEdges
-            )
+            timer.measure("prepare_inputs") {
+                buildPreparedInputsLocally(
+                    assets,
+                    assetBase,
+                    nCloth,
+                    nObs,
+                    edgeIndexMesh,
+                    edgeIndexCoarse0,
+                    edgeIndexCoarse1,
+                    edgeIndexCoarse2,
+                    collisionRadius,
+                    kWorldEdges,
+                    timer
+                )
+            }
         } else {
             PreparedInputs(
                 clothRaw = readFloatBinary(assets, "$assetBase/cloth_raw.bin"),
@@ -261,7 +308,33 @@ object HoodPipelineRunner {
             System.arraycopy(obstacleRaw, src, combinedNodeRaw, activeWrite, nodeFeatureDim)
             activeWrite += nodeFeatureDim
         }
-        val combinedLatent = runOnnx(shared.nodeEnc.session, combinedNodeRaw, longArrayOf((nCloth + nActiveObs).toLong(), nodeFeatureDim.toLong()))
+        val combinedLatent = timer.measure(if (shared.gpuNodeEncoder != null) "node_encoder_gpu" else "node_encoder") {
+            val rows = nCloth + nActiveObs
+            val gpuEncoder = shared.gpuNodeEncoder
+            if (gpuEncoder != null) {
+                try {
+                    gpuEncoder.run(combinedNodeRaw, rows)
+                } catch (t: Throwable) {
+                    Log.w("HoodOnnxTest", "GPU node encoder failed, falling back to ORT: ${t.message}")
+                    runOnnx(shared.nodeEnc.session, combinedNodeRaw, longArrayOf(rows.toLong(), nodeFeatureDim.toLong()))
+                }
+            } else {
+                runOnnx(shared.nodeEnc.session, combinedNodeRaw, longArrayOf(rows.toLong(), nodeFeatureDim.toLong()))
+            }
+        }
+        if (logIntermediate && shared.gpuNodeEncoder != null) {
+            val refCombinedLatent = runOnnx(shared.nodeEnc.session, combinedNodeRaw, longArrayOf((nCloth + nActiveObs).toLong(), nodeFeatureDim.toLong()))
+            logIfExpected("node_encoder_gpu_vs_ort", combinedLatent, refCombinedLatent)
+        }
+        val expectedCombinedLatent = (nCloth + nActiveObs) * latent
+        if (combinedLatent.size != expectedCombinedLatent) {
+            Log.e(
+                "HoodOnnxTest",
+                "node_encoder output size mismatch expected=$expectedCombinedLatent actual=${combinedLatent.size} " +
+                    "nCloth=$nCloth nActiveObs=$nActiveObs latent=$latent nodeFeatureDim=$nodeFeatureDim"
+            )
+            error("node_encoder output size mismatch")
+        }
         val clothLatent = combinedLatent.copyOfRange(0, nCloth * latent)
         val obsLatent = FloatArray(nObs * latent)
         var activeRead = nCloth * latent
@@ -274,15 +347,15 @@ object HoodPipelineRunner {
         logIfExpected("node_encoder_cloth", clothLatent, expNodeEncCloth)
         logIfExpected("node_encoder_obstacle", obsLatent, expNodeEncObs)
 
-        val meshLatentFull = runOnnx(shared.edgeMeshEnc.session, meshRaw, shapeEdgeMesh)
-        val coarse0LatentFull = runOnnx(shared.edgeCoarse0Enc.session, coarse0Raw, shapeEdgeCoarse0)
-        val coarse1LatentFull = runOnnx(shared.edgeCoarse1Enc.session, coarse1Raw, shapeEdgeCoarse1)
-        val coarse2LatentFull = runOnnx(shared.edgeCoarse2Enc.session, coarse2Raw, shapeEdgeCoarse2)
+        val meshLatentFull = timer.measure("edge_encoder_mesh") { runOnnx(shared.edgeMeshEnc.session, meshRaw, shapeEdgeMesh) }
+        val coarse0LatentFull = timer.measure("edge_encoder_coarse0") { runOnnx(shared.edgeCoarse0Enc.session, coarse0Raw, shapeEdgeCoarse0) }
+        val coarse1LatentFull = timer.measure("edge_encoder_coarse1") { runOnnx(shared.edgeCoarse1Enc.session, coarse1Raw, shapeEdgeCoarse1) }
+        val coarse2LatentFull = timer.measure("edge_encoder_coarse2") { runOnnx(shared.edgeCoarse2Enc.session, coarse2Raw, shapeEdgeCoarse2) }
 
         val worldCat = FloatArray(worldDirectRaw.size + worldInverseRaw.size)
         System.arraycopy(worldDirectRaw, 0, worldCat, 0, worldDirectRaw.size)
         System.arraycopy(worldInverseRaw, 0, worldCat, worldDirectRaw.size, worldInverseRaw.size)
-        val worldLatentCat = runOnnx(shared.edgeWorldEnc.session, worldCat, shapeWorldCat)
+        val worldLatentCat = timer.measure("edge_encoder_world") { runOnnx(shared.edgeWorldEnc.session, worldCat, shapeWorldCat) }
 
         var clothNodes = clothLatent
         var obsNodes = obsLatent
@@ -310,24 +383,28 @@ object HoodPipelineRunner {
             val step = steps.getJSONObject(i)
             when (step.getString("type")) {
                 "downsample" -> {
-                    val remainingMask = computeRemainingNodeMask(step.getJSONArray("target_edge_keys"), nCloth, edgeIndexMesh, edgeIndexCoarse0, edgeIndexCoarse1, edgeIndexCoarse2)
-                    val worldDirectStash = filterWorldEdges(edgeIndexWorldDirect, worldDirectEdges, remainingMask, latent, useSourceMask = false, useTargetMask = true)
-                    edgeIndexWorldDirect = worldDirectStash.first
-                    worldDirectEdges = worldDirectStash.second
-                    val worldInverseStash = filterWorldEdges(edgeIndexWorldInverse, worldInverseEdges, remainingMask, latent, useSourceMask = true, useTargetMask = false)
-                    edgeIndexWorldInverse = worldInverseStash.first
-                    worldInverseEdges = worldInverseStash.second
-                    downsampleStack.addLast(DownsampleStash(worldDirectStash.third, worldInverseStash.third))
+                    timer.measure("downsample") {
+                        val remainingMask = computeRemainingNodeMask(step.getJSONArray("target_edge_keys"), nCloth, edgeIndexMesh, edgeIndexCoarse0, edgeIndexCoarse1, edgeIndexCoarse2)
+                        val worldDirectStash = filterWorldEdges(edgeIndexWorldDirect, worldDirectEdges, remainingMask, latent, useSourceMask = false, useTargetMask = true)
+                        edgeIndexWorldDirect = worldDirectStash.first
+                        worldDirectEdges = worldDirectStash.second
+                        val worldInverseStash = filterWorldEdges(edgeIndexWorldInverse, worldInverseEdges, remainingMask, latent, useSourceMask = true, useTargetMask = false)
+                        edgeIndexWorldInverse = worldInverseStash.first
+                        worldInverseEdges = worldInverseStash.second
+                        downsampleStack.addLast(DownsampleStash(worldDirectStash.third, worldInverseStash.third))
+                    }
                     continue
                 }
                 "upsample" -> {
-                    val stashed = downsampleStack.removeLast()
-                    val restoredWorldDirect = restoreWorldEdges(stashed.worldDirect, worldDirectEdges, latent)
-                    edgeIndexWorldDirect = restoredWorldDirect.first
-                    worldDirectEdges = restoredWorldDirect.second
-                    val restoredWorldInverse = restoreWorldEdges(stashed.worldInverse, worldInverseEdges, latent)
-                    edgeIndexWorldInverse = restoredWorldInverse.first
-                    worldInverseEdges = restoredWorldInverse.second
+                    timer.measure("upsample") {
+                        val stashed = downsampleStack.removeLast()
+                        val restoredWorldDirect = restoreWorldEdges(stashed.worldDirect, worldDirectEdges, latent)
+                        edgeIndexWorldDirect = restoredWorldDirect.first
+                        worldDirectEdges = restoredWorldDirect.second
+                        val restoredWorldInverse = restoreWorldEdges(stashed.worldInverse, worldInverseEdges, latent)
+                        edgeIndexWorldInverse = restoredWorldInverse.first
+                        worldInverseEdges = restoredWorldInverse.second
+                    }
                     continue
                 }
             }
@@ -336,40 +413,36 @@ object HoodPipelineRunner {
             val block = step.getInt("block")
             val edgeKeys = step.getJSONArray("edge_keys")
 
-            val nodePath = "$modelBase/blocks/block_${level}_${block}_node.onnx"
-            val nodeSess = createRelaxedSession(env, assets, filesDir, nodePath)
+            val blockSessions = timer.measure("session_create_blocks") {
+                    getOrCreateBlockSessions(shared, env, assets, filesDir, nativeLibraryDir, profileDir, modelBase, level, block)
+            }
 
-            // Edge updates
-            val worldEdgePath = "$modelBase/blocks/block_${level}_${block}_edge_world_edge.onnx"
-            val worldEdgeSess = createRelaxedSession(env, assets, filesDir, worldEdgePath)
+            val worldDirectUpd = timer.measure("block_edge_mlp_world") {
+                runEdgeMlp(blockSessions.world.session, clothNodes, obsNodes, worldDirectEdges, edgeIndexWorldDirect, latent)
+            }
+            val worldInverseUpd = timer.measure("block_edge_mlp_world") {
+                runEdgeMlp(blockSessions.world.session, obsNodes, clothNodes, worldInverseEdges, edgeIndexWorldInverse, latent)
+            }
 
-            val meshEdgeSess = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_mesh_edge.onnx")) {
-                createRelaxedSession(env, assets, filesDir, "$modelBase/blocks/block_${level}_${block}_edge_mesh_edge.onnx")
+            val meshUpd = if (blockSessions.mesh != null) {
+                timer.measure("block_edge_mlp_mesh") {
+                    runEdgeMlp(blockSessions.mesh.session, clothNodes, clothNodes, meshEdges, edgeIndexMesh, latent)
+                }
             } else null
-            val coarse0Sess = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge0.onnx")) {
-                createRelaxedSession(env, assets, filesDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge0.onnx")
+            val coarse0Upd = if (blockSessions.coarse0 != null) {
+                timer.measure("block_edge_mlp_coarse0") {
+                    runEdgeMlp(blockSessions.coarse0.session, clothNodes, clothNodes, coarse0Edges, edgeIndexCoarse0, latent)
+                }
             } else null
-            val coarse1Sess = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge1.onnx")) {
-                createRelaxedSession(env, assets, filesDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge1.onnx")
+            val coarse1Upd = if (blockSessions.coarse1 != null) {
+                timer.measure("block_edge_mlp_coarse1") {
+                    runEdgeMlp(blockSessions.coarse1.session, clothNodes, clothNodes, coarse1Edges, edgeIndexCoarse1, latent)
+                }
             } else null
-            val coarse2Sess = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge2.onnx")) {
-                createRelaxedSession(env, assets, filesDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge2.onnx")
-            } else null
-
-            val worldDirectUpd = runEdgeMlp(worldEdgeSess, clothNodes, obsNodes, worldDirectEdges, edgeIndexWorldDirect, latent)
-            val worldInverseUpd = runEdgeMlp(worldEdgeSess, obsNodes, clothNodes, worldInverseEdges, edgeIndexWorldInverse, latent)
-
-            val meshUpd = if (meshEdgeSess != null) {
-                runEdgeMlp(meshEdgeSess, clothNodes, clothNodes, meshEdges, edgeIndexMesh, latent)
-            } else null
-            val coarse0Upd = if (coarse0Sess != null) {
-                runEdgeMlp(coarse0Sess, clothNodes, clothNodes, coarse0Edges, edgeIndexCoarse0, latent)
-            } else null
-            val coarse1Upd = if (coarse1Sess != null) {
-                runEdgeMlp(coarse1Sess, clothNodes, clothNodes, coarse1Edges, edgeIndexCoarse1, latent)
-            } else null
-            val coarse2Upd = if (coarse2Sess != null) {
-                runEdgeMlp(coarse2Sess, clothNodes, clothNodes, coarse2Edges, edgeIndexCoarse2, latent)
+            val coarse2Upd = if (blockSessions.coarse2 != null) {
+                timer.measure("block_edge_mlp_coarse2") {
+                    runEdgeMlp(blockSessions.coarse2.session, clothNodes, clothNodes, coarse2Edges, edgeIndexCoarse2, latent)
+                }
             } else null
 
             if (level == 0 && block == 0) {
@@ -379,56 +452,68 @@ object HoodPipelineRunner {
                 if (coarse0Upd != null) logIfExpected("block_0_0_updated_coarse0", coarse0Upd, expBlock0UpdCoarse0)
             }
 
-            val aggWorldCloth = CpuScatterSum.scatterSum(
-                edgeIndexWorldDirect.copyOfRange(0, edgeIndexWorldDirect.size / 2),
-                edgeIndexWorldDirect.copyOfRange(edgeIndexWorldDirect.size / 2, edgeIndexWorldDirect.size),
-                worldDirectUpd,
-                nCloth,
-                latent
-            )
-            val aggWorldObs = CpuScatterSum.scatterSum(
-                edgeIndexWorldInverse.copyOfRange(0, edgeIndexWorldInverse.size / 2),
-                edgeIndexWorldInverse.copyOfRange(edgeIndexWorldInverse.size / 2, edgeIndexWorldInverse.size),
-                worldInverseUpd,
-                nObs,
-                latent
-            )
+            val aggWorldCloth = timer.measure("scatter_world") {
+                CpuScatterSum.scatterSum(
+                    edgeIndexWorldDirect.copyOfRange(0, edgeIndexWorldDirect.size / 2),
+                    edgeIndexWorldDirect.copyOfRange(edgeIndexWorldDirect.size / 2, edgeIndexWorldDirect.size),
+                    worldDirectUpd,
+                    nCloth,
+                    latent
+                )
+            }
+            val aggWorldObs = timer.measure("scatter_world") {
+                CpuScatterSum.scatterSum(
+                    edgeIndexWorldInverse.copyOfRange(0, edgeIndexWorldInverse.size / 2),
+                    edgeIndexWorldInverse.copyOfRange(edgeIndexWorldInverse.size / 2, edgeIndexWorldInverse.size),
+                    worldInverseUpd,
+                    nObs,
+                    latent
+                )
+            }
 
             val aggMesh = if (meshUpd != null) {
-                CpuScatterSum.scatterSum(
-                    edgeIndexMesh.copyOfRange(0, edgeIndexMesh.size / 2),
-                    edgeIndexMesh.copyOfRange(edgeIndexMesh.size / 2, edgeIndexMesh.size),
-                    meshUpd,
-                    nCloth,
-                    latent
-                )
+                timer.measure("scatter_mesh") {
+                    CpuScatterSum.scatterSum(
+                        edgeIndexMesh.copyOfRange(0, edgeIndexMesh.size / 2),
+                        edgeIndexMesh.copyOfRange(edgeIndexMesh.size / 2, edgeIndexMesh.size),
+                        meshUpd,
+                        nCloth,
+                        latent
+                    )
+                }
             } else null
             val aggCoarse0 = if (coarse0Upd != null) {
-                CpuScatterSum.scatterSum(
-                    edgeIndexCoarse0.copyOfRange(0, edgeIndexCoarse0.size / 2),
-                    edgeIndexCoarse0.copyOfRange(edgeIndexCoarse0.size / 2, edgeIndexCoarse0.size),
-                    coarse0Upd,
-                    nCloth,
-                    latent
-                )
+                timer.measure("scatter_coarse0") {
+                    CpuScatterSum.scatterSum(
+                        edgeIndexCoarse0.copyOfRange(0, edgeIndexCoarse0.size / 2),
+                        edgeIndexCoarse0.copyOfRange(edgeIndexCoarse0.size / 2, edgeIndexCoarse0.size),
+                        coarse0Upd,
+                        nCloth,
+                        latent
+                    )
+                }
             } else null
             val aggCoarse1 = if (coarse1Upd != null) {
-                CpuScatterSum.scatterSum(
-                    edgeIndexCoarse1.copyOfRange(0, edgeIndexCoarse1.size / 2),
-                    edgeIndexCoarse1.copyOfRange(edgeIndexCoarse1.size / 2, edgeIndexCoarse1.size),
-                    coarse1Upd,
-                    nCloth,
-                    latent
-                )
+                timer.measure("scatter_coarse1") {
+                    CpuScatterSum.scatterSum(
+                        edgeIndexCoarse1.copyOfRange(0, edgeIndexCoarse1.size / 2),
+                        edgeIndexCoarse1.copyOfRange(edgeIndexCoarse1.size / 2, edgeIndexCoarse1.size),
+                        coarse1Upd,
+                        nCloth,
+                        latent
+                    )
+                }
             } else null
             val aggCoarse2 = if (coarse2Upd != null) {
-                CpuScatterSum.scatterSum(
-                    edgeIndexCoarse2.copyOfRange(0, edgeIndexCoarse2.size / 2),
-                    edgeIndexCoarse2.copyOfRange(edgeIndexCoarse2.size / 2, edgeIndexCoarse2.size),
-                    coarse2Upd,
-                    nCloth,
-                    latent
-                )
+                timer.measure("scatter_coarse2") {
+                    CpuScatterSum.scatterSum(
+                        edgeIndexCoarse2.copyOfRange(0, edgeIndexCoarse2.size / 2),
+                        edgeIndexCoarse2.copyOfRange(edgeIndexCoarse2.size / 2, edgeIndexCoarse2.size),
+                        coarse2Upd,
+                        nCloth,
+                        latent
+                    )
+                }
             } else null
 
             if (level == 0 && block == 0) {
@@ -445,10 +530,30 @@ object HoodPipelineRunner {
                 logNodeInSegments("block_0_0_node_in_cloth", nodeInCloth, expBlock0NodeIn, edgeKeys, nCloth, latent)
             }
 
-            val nodeOutCloth = runOnnx(nodeSess, nodeInCloth, longArrayOf(nCloth.toLong(), (latent * (1 + edgeKeys.length())).toLong()))
-            val nodeOutObs = runOnnx(nodeSess, nodeInObs, longArrayOf(nObs.toLong(), (latent * (1 + edgeKeys.length())).toLong()))
+            val blockNodeCols = latent * (1 + edgeKeys.length())
+            val useNativeBlockNode = shared.nativeBlockNodeMlpReady && level == 0 && block == 0
+            val nodeOutCloth = timer.measure(if (useNativeBlockNode) "block_node_mlp_native" else "block_node_mlp") {
+                if (useNativeBlockNode) {
+                    NativeGpuBridge.runBlockNodeMlp(nodeInCloth, nCloth, blockNodeCols)
+                        ?: runOnnx(blockSessions.node.session, nodeInCloth, longArrayOf(nCloth.toLong(), blockNodeCols.toLong()))
+                } else {
+                    runOnnx(blockSessions.node.session, nodeInCloth, longArrayOf(nCloth.toLong(), blockNodeCols.toLong()))
+                }
+            }
+            val nodeOutObs = timer.measure(if (useNativeBlockNode) "block_node_mlp_native" else "block_node_mlp") {
+                if (useNativeBlockNode) {
+                    NativeGpuBridge.runBlockNodeMlp(nodeInObs, nObs, blockNodeCols)
+                        ?: runOnnx(blockSessions.node.session, nodeInObs, longArrayOf(nObs.toLong(), blockNodeCols.toLong()))
+                } else {
+                    runOnnx(blockSessions.node.session, nodeInObs, longArrayOf(nObs.toLong(), blockNodeCols.toLong()))
+                }
+            }
 
             if (level == 0 && block == 0) {
+                if (useNativeBlockNode) {
+                    val ortNodeOutCloth = runOnnx(blockSessions.node.session, nodeInCloth, longArrayOf(nCloth.toLong(), blockNodeCols.toLong()))
+                    logIfExpected("block_0_0_node_native_vs_ort", nodeOutCloth, ortNodeOutCloth)
+                }
                 logIfExpected("block_0_0_node_out_cloth", nodeOutCloth, expBlock0NodeOut)
             }
 
@@ -466,22 +571,22 @@ object HoodPipelineRunner {
             val expBlk = if (logIntermediate) readFloatBinarySafe(assets, blkKey) else null
             logIfExpected("block_${level}_${block}_cloth_nodes", clothNodes, expBlk)
 
-            meshEdgeSess?.close()
-            coarse0Sess?.close()
-            coarse1Sess?.close()
-            coarse2Sess?.close()
-            worldEdgeSess.close()
-            nodeSess.close()
         }
 
-        val output = runOnnx(shared.decoder.session, clothNodes, longArrayOf(nCloth.toLong(), latent.toLong()))
+        val output = timer.measure("decoder") {
+            runOnnx(shared.decoder.session, clothNodes, longArrayOf(nCloth.toLong(), latent.toLong()))
+        }
         val maxDiff = maxAbsDiff(output, expected)
         val line = "pipeline max_abs_diff=$maxDiff"
         Log.i("HoodOnnxTest", line)
+        Log.i("HoodOnnxTest", timer.summary("time/"))
         return FrameRunResult(line, maxDiff)
     }
 
     private fun selectModelBase(assets: AssetManager): String {
+        if (ENABLE_DUMMY_MODEL_SET && assetExists(assets, "models_dummy_dynamic/node_encoder.onnx")) {
+            return "models_dummy_dynamic"
+        }
         return if (assetExists(assets, "models_dynamic/node_encoder.onnx")) "models_dynamic" else "models_embedded"
     }
 
@@ -489,21 +594,32 @@ object HoodPipelineRunner {
         env: OrtEnvironment,
         assets: AssetManager,
         filesDir: File,
+        nativeLibraryDir: String,
         profileDir: File,
         modelBase: String
     ): SharedSessions {
         return SharedSessions(
-            nodeEnc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/node_encoder.onnx", "real/node_encoder"),
-            edgeMeshEnc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_mesh.onnx", "real/edge_encoder_mesh"),
-            edgeWorldEnc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_world.onnx", "real/edge_encoder_world"),
-            edgeCoarse0Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse0.onnx", "real/edge_encoder_coarse0"),
-            edgeCoarse1Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse1.onnx", "real/edge_encoder_coarse1"),
-            edgeCoarse2Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse2.onnx", "real/edge_encoder_coarse2"),
-            decoder = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/node_decoder.onnx", "real/node_decoder")
+            nodeEnc = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/node_encoder.onnx", "real/node_encoder"),
+            edgeMeshEnc = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/edge_encoder_mesh.onnx", "real/edge_encoder_mesh"),
+            edgeWorldEnc = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/edge_encoder_world.onnx", "real/edge_encoder_world"),
+            edgeCoarse0Enc = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/edge_encoder_coarse0.onnx", "real/edge_encoder_coarse0"),
+            edgeCoarse1Enc = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/edge_encoder_coarse1.onnx", "real/edge_encoder_coarse1"),
+            edgeCoarse2Enc = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/edge_encoder_coarse2.onnx", "real/edge_encoder_coarse2"),
+            decoder = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/node_decoder.onnx", "real/node_decoder"),
+            gpuNodeEncoder = if (ENABLE_GPU_NODE_ENCODER) GpuNodeEncoder.tryCreate(assets) else null,
+            nativeBlockNodeMlpReady = if (ENABLE_NATIVE_BLOCK_NODE_MLP) prepareNativeBlockNodeMlp(assets, filesDir) else false
         )
     }
 
     private fun closeSharedSessions(shared: SharedSessions) {
+        for (block in shared.blockSessions.values) {
+            closeProfiledSession(block.node)
+            closeProfiledSession(block.world)
+            block.mesh?.let { closeProfiledSession(it) }
+            block.coarse0?.let { closeProfiledSession(it) }
+            block.coarse1?.let { closeProfiledSession(it) }
+            block.coarse2?.let { closeProfiledSession(it) }
+        }
         closeProfiledSession(shared.nodeEnc)
         closeProfiledSession(shared.edgeMeshEnc)
         closeProfiledSession(shared.edgeWorldEnc)
@@ -511,17 +627,89 @@ object HoodPipelineRunner {
         closeProfiledSession(shared.edgeCoarse1Enc)
         closeProfiledSession(shared.edgeCoarse2Enc)
         closeProfiledSession(shared.decoder)
+        shared.gpuNodeEncoder?.close()
+        if (shared.nativeBlockNodeMlpReady && NativeGpuBridge.isLoaded()) {
+            NativeGpuBridge.closeBlockNodeMlp()
+        }
+    }
+
+    private fun getOrCreateBlockSessions(
+        shared: SharedSessions,
+        env: OrtEnvironment,
+        assets: AssetManager,
+        filesDir: File,
+        nativeLibraryDir: String,
+        profileDir: File,
+        modelBase: String,
+        level: Int,
+        block: Int
+    ): BlockSessions {
+        val key = "$level/$block"
+        return shared.blockSessions.getOrPut(key) {
+            val labelBase = "real/block_${level}_${block}"
+            BlockSessions(
+                node = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/blocks/block_${level}_${block}_node.onnx", "$labelBase/node"),
+                world = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_world_edge.onnx", "$labelBase/edge_world"),
+                mesh = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_mesh_edge.onnx")) {
+                    createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_mesh_edge.onnx", "$labelBase/edge_mesh")
+                } else null,
+                coarse0 = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge0.onnx")) {
+                    createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge0.onnx", "$labelBase/edge_coarse0")
+                } else null,
+                coarse1 = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge1.onnx")) {
+                    createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge1.onnx", "$labelBase/edge_coarse1")
+                } else null,
+                coarse2 = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge2.onnx")) {
+                    createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge2.onnx", "$labelBase/edge_coarse2")
+                } else null
+            )
+        }
     }
 
     private fun createRelaxedSession(
         env: OrtEnvironment,
         assets: AssetManager,
         filesDir: File,
+        nativeLibraryDir: String,
         assetName: String
     ): OrtSession {
         val opts = OrtSession.SessionOptions()
-        opts.addNnapi()
+        if (ENABLE_QNN) {
+            opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.NO_OPT)
+            configureRealPipelineProvider(opts, assets, filesDir, nativeLibraryDir)
+        }
         return env.createSession(copyAssetToFile(assets, filesDir, assetName).absolutePath, opts)
+    }
+
+    private fun prepareNativeBlockNodeMlp(
+        assets: AssetManager,
+        filesDir: File
+    ): Boolean {
+        if (!NativeGpuBridge.isLoaded()) return false
+        val manifestAsset = "gpu/block_0_0_node/manifest.json"
+        if (!assetExists(assets, manifestAsset)) return false
+        val outDir = File(filesDir, "gpu/block_0_0_node")
+        outDir.mkdirs()
+        val files = arrayOf(
+            "manifest.json",
+            "linear0_weight.bin",
+            "linear0_bias.bin",
+            "linear1_weight.bin",
+            "linear1_bias.bin",
+            "linear2_weight.bin",
+            "linear2_bias.bin",
+            "layernorm_gamma.bin",
+            "layernorm_beta.bin"
+        )
+        for (name in files) {
+            copyAssetToFile(assets, filesDir, "gpu/block_0_0_node/$name")
+        }
+        return try {
+            NativeGpuBridge.initBlockNodeMlp(outDir.absolutePath)
+        } catch (t: Throwable) {
+            Log.w("HoodOnnxTest", "Failed to init native block node MLP: ${t.message}")
+            false
+        }
     }
 
     private fun buildPreparedInputsLocally(
@@ -534,7 +722,8 @@ object HoodPipelineRunner {
         edgeIndexCoarse1: IntArray,
         edgeIndexCoarse2: IntArray,
         collisionRadius: Float,
-        kWorldEdges: Int?
+        kWorldEdges: Int?,
+        timer: StageTimer? = null
     ): PreparedInputs {
         val clothPos = readFloatBinary(assets, "$assetBase/cloth_pos.bin")
         val clothPrevPos = readFloatBinary(assets, "$assetBase/cloth_prev_pos.bin")
@@ -569,16 +758,43 @@ object HoodPipelineRunner {
 
         val clothVelocity = subtractVec3(clothPos, clothPrevPos)
         applyPinnedVertexUpdate(clothPos, clothPrevPos, clothTargetPos, clothVertexType)
-        val worldConnectivity = computeWorldEdgeConnectivity(clothPos, obstaclePos, obstacleVertexType, collisionRadius, kWorldEdges)
+        val worldConnectivity = (timer?.measure("prepare_world_connectivity") {
+            computeWorldEdgeConnectivity(clothPos, obstaclePos, obstacleVertexType, collisionRadius, kWorldEdges)
+        } ?: computeWorldEdgeConnectivity(clothPos, obstaclePos, obstacleVertexType, collisionRadius, kWorldEdges))
         val edgeIndexWorldInverse = worldConnectivity.first
         val edgeIndexWorldDirect = worldConnectivity.second
         val activeMask = worldConnectivity.third
 
-        val clothNormals = computeVertexNormals(clothPos, clothFaces, nCloth)
-        val obstacleNormals = computeVertexNormals(obstaclePos, obstacleFaces, nObs)
+        val clothNormals = (timer?.measure("prepare_cloth_normals") {
+            computeVertexNormals(clothPos, clothFaces, nCloth)
+        } ?: computeVertexNormals(clothPos, clothFaces, nCloth))
+        val obstacleNormals = (timer?.measure("prepare_obstacle_normals") {
+            computeVertexNormals(obstaclePos, obstacleFaces, nObs)
+        } ?: computeVertexNormals(obstaclePos, obstacleFaces, nObs))
         val obstacleVelocity = subtractVec3(obstaclePos, obstaclePrevPos)
 
-        val clothRaw = buildNodeFeatures(
+        val clothRaw = (timer?.measure("prepare_cloth_nodes") {
+            buildNodeFeatures(
+                numNodes = nCloth,
+                velocity = clothVelocity,
+                vertexType = clothVertexType,
+                vertexLevel = clothVertexLevel,
+                normals = clothNormals,
+                timestep = timestep,
+                logVMass = clothLogVMass,
+                bending = clothBending,
+                lameMu = clothLameMu,
+                lameLambda = clothLameLambda,
+                nodeTypeEmbedding = nodeTypeEmbedding,
+                nodeTypeEmbeddingShape = nodeTypeEmbeddingShape,
+                vertexLevelEmbedding = vertexLevelEmbedding,
+                vertexLevelEmbeddingShape = vertexLevelEmbeddingShape,
+                nodeNormMean = nodeNormMean,
+                nodeNormStd = nodeNormStd,
+                activeMask = null,
+                isObstacle = false
+            )
+        } ?: buildNodeFeatures(
             numNodes = nCloth,
             velocity = clothVelocity,
             vertexType = clothVertexType,
@@ -597,8 +813,29 @@ object HoodPipelineRunner {
             nodeNormStd = nodeNormStd,
             activeMask = null,
             isObstacle = false
-        )
-        val obstacleRaw = buildNodeFeatures(
+        ))
+        val obstacleRaw = (timer?.measure("prepare_obstacle_nodes") {
+            buildNodeFeatures(
+                numNodes = nObs,
+                velocity = obstacleVelocity,
+                vertexType = obstacleVertexType,
+                vertexLevel = obstacleVertexLevel,
+                normals = obstacleNormals,
+                timestep = timestep,
+                logVMass = null,
+                bending = -1f,
+                lameMu = -1f,
+                lameLambda = -1f,
+                nodeTypeEmbedding = nodeTypeEmbedding,
+                nodeTypeEmbeddingShape = nodeTypeEmbeddingShape,
+                vertexLevelEmbedding = vertexLevelEmbedding,
+                vertexLevelEmbeddingShape = vertexLevelEmbeddingShape,
+                nodeNormMean = nodeNormMean,
+                nodeNormStd = nodeNormStd,
+                activeMask = activeMask,
+                isObstacle = true
+            )
+        } ?: buildNodeFeatures(
             numNodes = nObs,
             velocity = obstacleVelocity,
             vertexType = obstacleVertexType,
@@ -617,14 +854,26 @@ object HoodPipelineRunner {
             nodeNormStd = nodeNormStd,
             activeMask = activeMask,
             isObstacle = true
-        )
+        ))
 
-        val meshRaw = buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexMesh, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd)
-        val coarse0Raw = buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexCoarse0, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd)
-        val coarse1Raw = buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexCoarse1, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd)
-        val coarse2Raw = buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexCoarse2, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd)
-        val worldDirectRaw = buildWorldEdgeFeaturesObstacleToCloth(obstaclePos, obstacleTargetPos, clothPos, edgeIndexWorldDirect, timestep, worldNormMean, worldNormStd)
-        val worldInverseRaw = buildWorldEdgeFeaturesClothToObstacle(clothPos, obstaclePos, obstacleTargetPos, edgeIndexWorldInverse, timestep, worldNormMean, worldNormStd)
+        val meshRaw = (timer?.measure("prepare_mesh_edges") {
+            buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexMesh, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd)
+        } ?: buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexMesh, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd))
+        val coarse0Raw = (timer?.measure("prepare_coarse0_edges") {
+            buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexCoarse0, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd)
+        } ?: buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexCoarse0, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd))
+        val coarse1Raw = (timer?.measure("prepare_coarse1_edges") {
+            buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexCoarse1, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd)
+        } ?: buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexCoarse1, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd))
+        val coarse2Raw = (timer?.measure("prepare_coarse2_edges") {
+            buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexCoarse2, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd)
+        } ?: buildStaticEdgeFeatures(clothPos, clothRestPos, edgeIndexCoarse2, timestep, clothBending, clothLameMu, clothLameLambda, meshNormMean, meshNormStd))
+        val worldDirectRaw = (timer?.measure("prepare_world_direct_edges") {
+            buildWorldEdgeFeaturesObstacleToCloth(obstaclePos, obstacleTargetPos, clothPos, edgeIndexWorldDirect, timestep, worldNormMean, worldNormStd)
+        } ?: buildWorldEdgeFeaturesObstacleToCloth(obstaclePos, obstacleTargetPos, clothPos, edgeIndexWorldDirect, timestep, worldNormMean, worldNormStd))
+        val worldInverseRaw = (timer?.measure("prepare_world_inverse_edges") {
+            buildWorldEdgeFeaturesClothToObstacle(clothPos, obstaclePos, obstacleTargetPos, edgeIndexWorldInverse, timestep, worldNormMean, worldNormStd)
+        } ?: buildWorldEdgeFeaturesClothToObstacle(clothPos, obstaclePos, obstacleTargetPos, edgeIndexWorldInverse, timestep, worldNormMean, worldNormStd))
 
         return PreparedInputs(
             clothRaw = clothRaw,
@@ -1106,17 +1355,85 @@ object HoodPipelineRunner {
         env: OrtEnvironment,
         assets: AssetManager,
         filesDir: File,
+        nativeLibraryDir: String,
         profileDir: File,
         assetName: String,
         label: String
     ): ProfiledSession {
         val opts = OrtSession.SessionOptions()
-        opts.addNnapi()
+        if (ENABLE_QNN) {
+            opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.NO_OPT)
+            configureRealPipelineProvider(opts, assets, filesDir, nativeLibraryDir)
+        }
         opts.setSessionLogLevel(OrtLoggingLevel.ORT_LOGGING_LEVEL_WARNING)
         val profileFile = File(profileDir, "ort_profile_${label.replace('/', '_')}.json")
         opts.enableProfiling(profileFile.absolutePath)
         val session = env.createSession(copyAssetToFile(assets, filesDir, assetName).absolutePath, opts)
         return ProfiledSession(label, session)
+    }
+
+    private fun configureRealPipelineProvider(
+        opts: OrtSession.SessionOptions,
+        assets: AssetManager,
+        filesDir: File,
+        nativeLibraryDir: String
+    ) {
+        val skelDir = prepareQnnSkels(assets, filesDir)
+        try {
+            Os.setenv("ADSP_LIBRARY_PATH", skelDir.absolutePath, true)
+        } catch (t: Throwable) {
+            Log.w("HoodOnnxTest", "Failed to set ADSP_LIBRARY_PATH=${skelDir.absolutePath}", t)
+        }
+
+        val backendPath = File(nativeLibraryDir, "libQnnHtp.so").absolutePath
+        val providerOptionsKeys = arrayOf("backend_path")
+        val providerOptionsValues = arrayOf(backendPath)
+
+        try {
+            val providerOptionsClass = Class.forName("ai.onnxruntime.OrtProviderOptions")
+            val getApiHandle = providerOptionsClass.getDeclaredMethod("getApiHandle")
+            getApiHandle.isAccessible = true
+            val apiHandle = getApiHandle.invoke(null) as Long
+
+            val getNativeHandle = OrtSession.SessionOptions::class.java.getDeclaredMethod("getNativeHandle")
+            getNativeHandle.isAccessible = true
+            val nativeHandle = getNativeHandle.invoke(opts) as Long
+
+            val addExecutionProvider = OrtSession.SessionOptions::class.java.getDeclaredMethod(
+                "addExecutionProvider",
+                java.lang.Long.TYPE,
+                java.lang.Long.TYPE,
+                String::class.java,
+                Array<String>::class.java,
+                Array<String>::class.java
+            )
+            addExecutionProvider.isAccessible = true
+            addExecutionProvider.invoke(opts, apiHandle, nativeHandle, "QNN", providerOptionsKeys, providerOptionsValues)
+        } catch (t: Throwable) {
+            throw RuntimeException("Failed to configure QNN execution provider", t)
+        }
+    }
+
+    private fun prepareQnnSkels(assets: AssetManager, filesDir: File): File {
+        val outDir = File(filesDir, "qnn_htp")
+        outDir.mkdirs()
+        val skelAssets = arrayOf(
+            "qnn/hexagon-v68/unsigned/libQnnHtpV68Skel.so",
+            "qnn/hexagon-v69/unsigned/libQnnHtpV69Skel.so",
+            "qnn/hexagon-v73/unsigned/libQnnHtpV73Skel.so",
+            "qnn/hexagon-v75/unsigned/libQnnHtpV75Skel.so",
+            "qnn/hexagon-v79/unsigned/libQnnHtpV79Skel.so",
+            "qnn/hexagon-v81/unsigned/libQnnHtpV81Skel.so"
+        )
+        for (asset in skelAssets) {
+            val name = asset.substringAfterLast('/')
+            val outFile = File(outDir, name)
+            if (outFile.exists()) continue
+            assets.open(asset).use { input ->
+                outFile.outputStream().use { output -> input.copyTo(output) }
+            }
+        }
+        return outDir
     }
 
     private fun closeProfiledSession(profiled: ProfiledSession) {
@@ -1319,13 +1636,53 @@ object HoodPipelineRunner {
         val inputTensor = OnnxTensor.createTensor(OrtEnvironment.getEnvironment(), toFloatBuffer(input), shape)
         val results = session.run(mapOf(inputName to inputTensor))
         val outputTensor = results[0] as OnnxTensor
+        val expectedElements = outputTensor.info.numElements.toInt()
         val fb = outputTensor.floatBuffer
-        val out = FloatArray(fb.remaining())
-        fb.get(out)
+        fb.rewind()
+        val out = if (fb.remaining() == expectedElements) {
+            FloatArray(expectedElements).also { fb.get(it) }
+        } else {
+            flattenTensorValue(outputTensor.value, expectedElements)
+        }
+        if (out.size != expectedElements) {
+            Log.e(
+                "HoodOnnxTest",
+                "runOnnx size mismatch inputShape=${shape.joinToString(prefix = "[", postfix = "]")} " +
+                    "outputShape=${outputTensor.info.shape.joinToString(prefix = "[", postfix = "]")} " +
+                    "expectedElements=$expectedElements actual=${out.size}"
+            )
+        }
         outputTensor.close()
         inputTensor.close()
         results.close()
         return out
+    }
+
+    private fun flattenTensorValue(value: Any?, expectedElements: Int): FloatArray {
+        val out = FloatArray(expectedElements)
+        val written = flattenTensorValueInto(value, out, 0)
+        require(written == expectedElements) {
+            "Unexpected tensor size: wrote=$written expected=$expectedElements"
+        }
+        return out
+    }
+
+    private fun flattenTensorValueInto(value: Any?, out: FloatArray, offset: Int): Int {
+        return when (value) {
+            null -> offset
+            is FloatArray -> {
+                System.arraycopy(value, 0, out, offset, value.size)
+                offset + value.size
+            }
+            is Array<*> -> {
+                var cursor = offset
+                for (item in value) {
+                    cursor = flattenTensorValueInto(item, out, cursor)
+                }
+                cursor
+            }
+            else -> error("Unsupported tensor value type: ${value::class.java.name}")
+        }
     }
 
     private fun toFloatBuffer(data: FloatArray): java.nio.FloatBuffer {
@@ -1466,6 +1823,7 @@ object HoodPipelineRunner {
             val providerCounts = mutableMapOf<String, Int>()
             val cpuOps = mutableSetOf<String>()
             val nnapiOps = mutableSetOf<String>()
+            val qnnOps = mutableSetOf<String>()
 
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
@@ -1477,14 +1835,16 @@ object HoodPipelineRunner {
                 providerCounts[provider] = (providerCounts[provider] ?: 0) + 1
                 if (provider.contains("CPU")) cpuOps.add(opName)
                 if (provider.contains("Nnapi")) nnapiOps.add(opName)
+                if (provider.contains("QNN")) qnnOps.add(opName)
             }
 
             val providerSummary = providerCounts.entries
                 .sortedByDescending { it.value }
                 .joinToString(", ") { "${it.key}=${it.value}" }
+            val qnnList = qnnOps.toList().sorted().joinToString(", ")
             val nnapiList = nnapiOps.toList().sorted().joinToString(", ")
             val cpuList = cpuOps.toList().sorted().joinToString(", ")
-            "providers: $providerSummary; NNAPI ops: [$nnapiList]; CPU ops: [$cpuList]"
+            "providers: $providerSummary; QNN ops: [$qnnList]; NNAPI ops: [$nnapiList]; CPU ops: [$cpuList]"
         } catch (t: Throwable) {
             "profile summary failed: ${t.message}"
         }

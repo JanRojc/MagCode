@@ -31,6 +31,7 @@ Android/DebugOutput/
 Android/HoodOnnxTest/app/src/main/assets/models/
 Android/HoodOnnxTest/app/src/main/assets/models_embedded/
 Android/HoodOnnxTest/app/src/main/assets/models_dynamic/
+Android/HoodOnnxTest/app/src/main/assets/gpu/
 Android/HoodOnnxTest/app/src/main/assets/pipeline/
 Android/HoodOnnxTest/app/src/main/assets/probes/*.onnx
 Android/HoodOnnxTest/app/src/main/assets/probes/*_input*.bin
@@ -42,6 +43,7 @@ Android/HoodOnnxTest/app/src/main/assets/*_shape.json
 Android/HoodOnnxTest/app/src/main/assets/output*
 Android/HoodOnnxTest/local.properties
 Android/HoodOnnxTest/.idea/
+Android/HoodOnnxTest/app/libs/onnxruntime-release.aar
 Android/HoodOnnxTest/app/src/main/assets/pipeline_real/
 Android/HoodOnnxTest/app/src/main/assets/pipeline_real_sequence/
 
@@ -49,6 +51,14 @@ Android/HoodOnnxTest/app/src/main/assets/pipeline_real_sequence/
 Models/ContourCraft/tools/onnx_out_*/
 Models/ContourCraft/tools/onnx_ops_report*.json
 Models/ContourCraft/tools/golden/
+
+# qualcomm libs
+Libs/qairt/
+Libs/qairtMac/
+
+# macOS / Android Studio native build outputs
+.DS_Store
+Android/HoodOnnxTest/app/.cxx/
 
 # Unity noise
 # Unity/**/Library/

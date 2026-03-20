@@ -20,7 +20,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val statusView = TextView(this)
-        statusView.text = "Running ONNX Runtime NNAPI tests..."
+        statusView.text = "Running ONNX Runtime pipeline..."
         statusView.movementMethod = ScrollingMovementMethod()
         statusView.setTextIsSelectable(true)
         setContentView(statusView)
@@ -39,15 +39,6 @@ class MainActivity : Activity() {
 
     private fun runAll(): String {
         val env = OrtEnvironment.getEnvironment()
-        val opts = OrtSession.SessionOptions()
-
-        // Fail fast if NNAPI is not available
-        opts.addNnapi()
-        opts.addConfigEntry("session.disable_cpu_ep_fallback", "1")
-        // Verbose logging not available in this ORT Java API; rely on exception output.
-
-        val tests = readTests()
-        var maxDiffAll = 0.0f
         val reportLines = mutableListOf<String>()
 
         val aggOk = CpuScatterSum.selfTest()
@@ -58,66 +49,10 @@ class MainActivity : Activity() {
             return "FAILED: cpu_scatter_sum_selftest=false"
         }
 
-        val probeLines = runProbes()
-        if (probeLines.isNotEmpty()) {
-            reportLines.add("=== NNAPI probe ===")
-            reportLines.addAll(probeLines)
-            reportLines.add("")
-        }
-
         val pipelineProfileDir = getExternalFilesDir(null) ?: filesDir
-        val pipelineLine = HoodPipelineRunner.run(assets, filesDir, env, pipelineProfileDir)
+        val pipelineLine = HoodPipelineRunner.run(assets, filesDir, applicationInfo.nativeLibraryDir, env, pipelineProfileDir)
         reportLines.add(pipelineLine)
-        reportLines.add("")
-
-        for (i in 0 until tests.length()) {
-            val t = tests.getJSONObject(i)
-            val name = t.getString("name")
-
-            val modelPath = copyAssetToFile(t.getString("model"))
-            val inputShape = readShapeJson(t.getString("input_shape"))
-            val outputShape = readShapeJson(t.getString("output_shape"))
-
-            val inputData = readFloatBinary(t.getString("input_bin"))
-            val expectedData = readFloatBinary(t.getString("output_bin"))
-
-            try {
-                val session = env.createSession(modelPath.absolutePath, opts)
-                val inputName = session.inputNames.first()
-                val inputTensor = OnnxTensor.createTensor(env, toFloatBuffer(inputData), inputShape)
-
-                val results = session.run(mapOf(inputName to inputTensor))
-                val outputTensor = results[0] as OnnxTensor
-
-                val output = outputTensor.floatBuffer
-                output.rewind()
-
-                var maxDiff = 0.0f
-                for (j in expectedData.indices) {
-                    val v = output.get()
-                    val diff = kotlin.math.abs(v - expectedData[j])
-                    if (diff > maxDiff) maxDiff = diff
-                }
-
-                if (maxDiff > maxDiffAll) maxDiffAll = maxDiff
-                val line = "${i + 1}/${tests.length()} $name max_abs_diff=$maxDiff"
-                reportLines.add(line)
-                Log.i("HoodOnnxTest", line)
-            } catch (t: Throwable) {
-                val diag = runDiagnostics(name, modelPath, inputData, inputShape)
-                val probeHeader = if (probeLines.isNotEmpty()) {
-                    "=== NNAPI probe ===\n" + probeLines.joinToString(separator = "\n") + "\n\n"
-                } else {
-                    ""
-                }
-                val msg = "${probeHeader}FAILED at $name. $diag"
-                Log.e("HoodOnnxTest", msg, t)
-                return msg
-            }
-        }
-
-        val reportText = "OK NNAPI. models=${tests.length()} max_abs_diff=$maxDiffAll\n\n" +
-                reportLines.joinToString(separator = "\n")
+        val reportText = reportLines.joinToString(separator = "\n")
         copyToClipboard(reportText)
 
         return reportText
@@ -286,6 +221,7 @@ class MainActivity : Activity() {
             val providerCounts = mutableMapOf<String, Int>()
             val cpuOps = mutableSetOf<String>()
             val nnapiOps = mutableSetOf<String>()
+            val qnnOps = mutableSetOf<String>()
 
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
@@ -297,15 +233,17 @@ class MainActivity : Activity() {
                 providerCounts[provider] = (providerCounts[provider] ?: 0) + 1
                 if (provider.contains("CPU")) cpuOps.add(opName)
                 if (provider.contains("Nnapi")) nnapiOps.add(opName)
+                if (provider.contains("QNN")) qnnOps.add(opName)
             }
 
             val providerSummary = providerCounts.entries
                 .sortedByDescending { it.value }
                 .joinToString(", ") { "${it.key}=${it.value}" }
+            val qnnList = qnnOps.toList().sorted().joinToString(", ")
             val nnapiList = nnapiOps.toList().sorted().joinToString(", ")
             val cpuList = cpuOps.toList().sorted().joinToString(", ")
 
-            "providers: $providerSummary; NNAPI ops: [$nnapiList]; CPU ops: [$cpuList]"
+            "providers: $providerSummary; QNN ops: [$qnnList]; NNAPI ops: [$nnapiList]; CPU ops: [$cpuList]"
         } catch (e: Throwable) {
             "profile summary failed: ${e.message}"
         }
