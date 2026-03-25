@@ -31,7 +31,10 @@ Android/DebugOutput/
 Android/HoodOnnxTest/app/src/main/assets/models/
 Android/HoodOnnxTest/app/src/main/assets/models_embedded/
 Android/HoodOnnxTest/app/src/main/assets/models_dynamic/
+Android/HoodOnnxTest/app/src/main/assets/models_dummy_dynamic/
 Android/HoodOnnxTest/app/src/main/assets/gpu/
+Android/HoodOnnxTest/app/src/main/assets/qairt_smoke/
+Android/HoodOnnxTest/app/src/main/assets/qnn_smoke/
 Android/HoodOnnxTest/app/src/main/assets/pipeline/
 Android/HoodOnnxTest/app/src/main/assets/probes/*.onnx
 Android/HoodOnnxTest/app/src/main/assets/probes/*_input*.bin
@@ -46,6 +49,10 @@ Android/HoodOnnxTest/.idea/
 Android/HoodOnnxTest/app/libs/onnxruntime-release.aar
 Android/HoodOnnxTest/app/src/main/assets/pipeline_real/
 Android/HoodOnnxTest/app/src/main/assets/pipeline_real_sequence/
+Android/HoodOnnxTest/app/src/main/cpp/ort_headers/
+Android/Qnn*Case/
+Android/QnnSmokeTest/
+Android/SplitArtifacts/
 
 # Generated ONNX models / reports
 Models/ContourCraft/tools/onnx_out_*/
