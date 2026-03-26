@@ -44,6 +44,9 @@ android {
         resources {
             excludes += ['META-INF/*']
         }
+        jniLibs {
+            useLegacyPackaging true
+        }
     }
 
     externalNativeBuild {
@@ -54,5 +57,5 @@ android {
 }
 
 dependencies {
-    implementation(name: 'onnxruntime-release', ext: 'aar')
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.24.2'
 }

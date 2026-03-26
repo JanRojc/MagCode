@@ -1,7 +1,6 @@
 package com.magcode.hoodonnxtest
 
 import android.content.res.AssetManager
-import android.system.Os
 import android.util.Log
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
@@ -15,10 +14,13 @@ import java.nio.ByteOrder
 
 object HoodPipelineRunner {
     private const val EDGE_MLP_CHUNK_EDGES = 4096
-    private const val ENABLE_QNN = false
-    private const val ENABLE_GPU_NODE_ENCODER = false
-    private const val ENABLE_NATIVE_BLOCK_NODE_MLP = false
     private const val ENABLE_DUMMY_MODEL_SET = false
+    private const val ENABLE_SINGLE_SEQUENCE_FRAME = true
+    // Split flags mean: run the exported MLP body on NNAPI, then apply LayerNorm on CPU.
+    private const val ENABLE_SPLIT_NODE_ENCODER = true
+    private const val ENABLE_SPLIT_EDGE_ENCODER_MESH = false
+    private const val ENABLE_SPLIT_EDGE_ENCODER_WORLD = false
+    private const val ENABLE_SPLIT_BLOCK_0_0_NODE = false
 
     private data class ProfiledSession(
         val label: String,
@@ -33,8 +35,18 @@ object HoodPipelineRunner {
         val edgeCoarse1Enc: ProfiledSession,
         val edgeCoarse2Enc: ProfiledSession,
         val decoder: ProfiledSession,
-        val gpuNodeEncoder: GpuNodeEncoder? = null,
-        val nativeBlockNodeMlpReady: Boolean = false,
+        val nodeEncSplitArtifacts: SplitPartitionArtifacts? = null,
+        val nodeEncSplitModelFile: File? = null,
+        val nodeEncSplitSession: ProfiledSession? = null,
+        val edgeMeshSplitArtifacts: SplitPartitionArtifacts? = null,
+        val edgeMeshSplitModelFile: File? = null,
+        val edgeMeshSplitSession: ProfiledSession? = null,
+        val edgeWorldSplitArtifacts: SplitPartitionArtifacts? = null,
+        val edgeWorldSplitModelFile: File? = null,
+        val edgeWorldSplitSession: ProfiledSession? = null,
+        val block00NodeSplitArtifacts: SplitPartitionArtifacts? = null,
+        val block00NodeSplitModelFile: File? = null,
+        val block00NodeSplitSession: ProfiledSession? = null,
         val blockSessions: MutableMap<String, BlockSessions> = linkedMapOf()
     )
 
@@ -76,6 +88,11 @@ object HoodPipelineRunner {
             }
         }
 
+        fun addMillis(name: String, millis: Double) {
+            val durNs = (millis * 1_000_000.0).toLong()
+            totalsNs[name] = (totalsNs[name] ?: 0L) + durNs
+        }
+
         fun summary(prefix: String): String {
             return totalsNs.entries.joinToString(separator = ", ") { entry ->
                 val ms = entry.value / 1_000_000.0
@@ -101,28 +118,42 @@ object HoodPipelineRunner {
     fun run(
         assets: AssetManager,
         filesDir: File,
-        nativeLibraryDir: String,
         env: OrtEnvironment,
         profileDir: File
     ): String {
         return when {
-            assetExists(assets, "pipeline_real_sequence/config.json") -> runSequence(assets, filesDir, nativeLibraryDir, env, profileDir)
-            assetExists(assets, "pipeline_real/config.json") -> runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, "pipeline_real", logIntermediate = true)
-            else -> runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, "pipeline", logIntermediate = true)
+            ENABLE_SINGLE_SEQUENCE_FRAME && assetExists(assets, "pipeline_real_sequence/config.json") ->
+                runSingleSequenceFrame(assets, filesDir, env, profileDir)
+            assetExists(assets, "pipeline_real_sequence/config.json") -> runSequence(assets, filesDir, env, profileDir)
+            assetExists(assets, "pipeline_real/config.json") -> runSingle(assets, filesDir, env, profileDir, "pipeline_real", logIntermediate = true)
+            else -> runSingle(assets, filesDir, env, profileDir, "pipeline", logIntermediate = true)
         }
+    }
+
+    private fun runSingleSequenceFrame(
+        assets: AssetManager,
+        filesDir: File,
+        env: OrtEnvironment,
+        profileDir: File
+    ): String {
+        val config = readJsonObject(assets, "pipeline_real_sequence/config.json")
+        val firstFrame = config.getJSONArray("frames").getJSONObject(0)
+        val frameIdx = firstFrame.getInt("frame_idx")
+        val assetBase = firstFrame.getString("asset_base")
+        val line = runSingle(assets, filesDir, env, profileDir, assetBase, logIntermediate = true)
+        return "sequence frame=$frameIdx $line"
     }
 
     private fun runSequence(
         assets: AssetManager,
         filesDir: File,
-        nativeLibraryDir: String,
         env: OrtEnvironment,
         profileDir: File
     ): String {
         val config = readJsonObject(assets, "pipeline_real_sequence/config.json")
         val frames = config.getJSONArray("frames")
         val modelBase = selectModelBase(assets)
-        val sessions = createSharedSessions(env, assets, filesDir, nativeLibraryDir, profileDir, modelBase)
+        val sessions = createSharedSessions(env, assets, filesDir, profileDir, modelBase)
         val lines = mutableListOf<String>()
         var maxDiffAll = 0f
         try {
@@ -130,7 +161,7 @@ object HoodPipelineRunner {
                 val frame = frames.getJSONObject(i)
                 val frameIdx = frame.getInt("frame_idx")
                 val assetBase = frame.getString("asset_base")
-                val result = runFrame(assets, filesDir, nativeLibraryDir, env, profileDir, assetBase, modelBase, sessions, logIntermediate = i == 0)
+                val result = runFrame(assets, filesDir, env, profileDir, assetBase, modelBase, sessions, logIntermediate = i == 0)
                 if (result.maxDiff > maxDiffAll) maxDiffAll = result.maxDiff
                 val line = "sequence frame=$frameIdx ${result.line}"
                 lines.add(line)
@@ -154,16 +185,15 @@ object HoodPipelineRunner {
     private fun runSingle(
         assets: AssetManager,
         filesDir: File,
-        nativeLibraryDir: String,
         env: OrtEnvironment,
         profileDir: File,
         assetBase: String,
         logIntermediate: Boolean
     ): String {
         val modelBase = selectModelBase(assets)
-        val sessions = createSharedSessions(env, assets, filesDir, nativeLibraryDir, profileDir, modelBase)
+        val sessions = createSharedSessions(env, assets, filesDir, profileDir, modelBase)
         return try {
-            runFrame(assets, filesDir, nativeLibraryDir, env, profileDir, assetBase, modelBase, sessions, logIntermediate).line
+            runFrame(assets, filesDir, env, profileDir, assetBase, modelBase, sessions, logIntermediate).line
         } finally {
             closeSharedSessions(sessions)
         }
@@ -172,7 +202,6 @@ object HoodPipelineRunner {
     private fun runFrame(
         assets: AssetManager,
         filesDir: File,
-        nativeLibraryDir: String,
         env: OrtEnvironment,
         profileDir: File,
         assetBase: String,
@@ -308,23 +337,35 @@ object HoodPipelineRunner {
             System.arraycopy(obstacleRaw, src, combinedNodeRaw, activeWrite, nodeFeatureDim)
             activeWrite += nodeFeatureDim
         }
-        val combinedLatent = timer.measure(if (shared.gpuNodeEncoder != null) "node_encoder_gpu" else "node_encoder") {
+        val combinedLatent = timer.measure("node_encoder") {
             val rows = nCloth + nActiveObs
-            val gpuEncoder = shared.gpuNodeEncoder
-            if (gpuEncoder != null) {
+            val splitArtifacts = shared.nodeEncSplitArtifacts
+            val splitSession = shared.nodeEncSplitSession
+            if (ENABLE_SPLIT_NODE_ENCODER && splitArtifacts != null && splitSession != null) {
                 try {
-                    gpuEncoder.run(combinedNodeRaw, rows)
+                    require(rows == splitArtifacts.rows) {
+                        "node_encoder split rows mismatch rows=$rows artifactRows=${splitArtifacts.rows}"
+                    }
+                    val mlpBody = timer.measure("node_encoder_split_exec") {
+                        runOnnx(splitSession.session, combinedNodeRaw, longArrayOf(rows.toLong(), nodeFeatureDim.toLong()))
+                    }
+                    timer.measure("node_encoder_split_layernorm") {
+                        NativeQairtBridge.applyLayerNorm(
+                            mlpBody,
+                            rows,
+                            splitArtifacts.outputDim,
+                            splitArtifacts.gamma,
+                            splitArtifacts.beta,
+                            splitArtifacts.eps
+                        )
+                    }
                 } catch (t: Throwable) {
-                    Log.w("HoodOnnxTest", "GPU node encoder failed, falling back to ORT: ${t.message}")
-                    runOnnx(shared.nodeEnc.session, combinedNodeRaw, longArrayOf(rows.toLong(), nodeFeatureDim.toLong()))
+                    Log.w("HoodOnnxTest", "NNAPI split node encoder failed, falling back to ORT: ${t.message}")
+                    runNodeEncoder(shared.nodeEnc.session, combinedNodeRaw, rows, nodeFeatureDim, nCloth + nObs)
                 }
             } else {
-                runOnnx(shared.nodeEnc.session, combinedNodeRaw, longArrayOf(rows.toLong(), nodeFeatureDim.toLong()))
+                runNodeEncoder(shared.nodeEnc.session, combinedNodeRaw, rows, nodeFeatureDim, nCloth + nObs)
             }
-        }
-        if (logIntermediate && shared.gpuNodeEncoder != null) {
-            val refCombinedLatent = runOnnx(shared.nodeEnc.session, combinedNodeRaw, longArrayOf((nCloth + nActiveObs).toLong(), nodeFeatureDim.toLong()))
-            logIfExpected("node_encoder_gpu_vs_ort", combinedLatent, refCombinedLatent)
         }
         val expectedCombinedLatent = (nCloth + nActiveObs) * latent
         if (combinedLatent.size != expectedCombinedLatent) {
@@ -334,6 +375,17 @@ object HoodPipelineRunner {
                     "nCloth=$nCloth nActiveObs=$nActiveObs latent=$latent nodeFeatureDim=$nodeFeatureDim"
             )
             error("node_encoder output size mismatch")
+        }
+        if (logIntermediate && ENABLE_SPLIT_NODE_ENCODER && shared.nodeEncSplitSession != null && expNodeEncCloth != null && expNodeEncObs != null) {
+            val expectedCombined = buildExpectedCombinedLatent(
+                nCloth = nCloth,
+                nObs = nObs,
+                latent = latent,
+                activeMask = activeMask,
+                expectedCloth = expNodeEncCloth,
+                expectedObstacle = expNodeEncObs
+            )
+            Log.i("HoodOnnxTest", "node_encoder_split_combined max_abs_diff=${maxAbsDiff(combinedLatent, expectedCombined)}")
         }
         val clothLatent = combinedLatent.copyOfRange(0, nCloth * latent)
         val obsLatent = FloatArray(nObs * latent)
@@ -347,7 +399,30 @@ object HoodPipelineRunner {
         logIfExpected("node_encoder_cloth", clothLatent, expNodeEncCloth)
         logIfExpected("node_encoder_obstacle", obsLatent, expNodeEncObs)
 
-        val meshLatentFull = timer.measure("edge_encoder_mesh") { runOnnx(shared.edgeMeshEnc.session, meshRaw, shapeEdgeMesh) }
+        val meshLatentFull = timer.measure("edge_encoder_mesh") {
+            val splitArtifacts = shared.edgeMeshSplitArtifacts
+            val splitSession = shared.edgeMeshSplitSession
+            if (ENABLE_SPLIT_EDGE_ENCODER_MESH && splitArtifacts != null && splitSession != null) {
+                require(shapeEdgeMesh[0].toInt() == splitArtifacts.rows) {
+                    "edge_encoder_mesh split rows mismatch rows=${shapeEdgeMesh[0]} artifactRows=${splitArtifacts.rows}"
+                }
+                val mlpBody = timer.measure("edge_encoder_mesh_split_exec") {
+                    runOnnx(splitSession.session, meshRaw, shapeEdgeMesh)
+                }
+                timer.measure("edge_encoder_mesh_split_layernorm") {
+                    NativeQairtBridge.applyLayerNorm(
+                        mlpBody,
+                        shapeEdgeMesh[0].toInt(),
+                        splitArtifacts.outputDim,
+                        splitArtifacts.gamma,
+                        splitArtifacts.beta,
+                        splitArtifacts.eps
+                    )
+                }
+            } else {
+                runOnnx(shared.edgeMeshEnc.session, meshRaw, shapeEdgeMesh)
+            }
+        }
         val coarse0LatentFull = timer.measure("edge_encoder_coarse0") { runOnnx(shared.edgeCoarse0Enc.session, coarse0Raw, shapeEdgeCoarse0) }
         val coarse1LatentFull = timer.measure("edge_encoder_coarse1") { runOnnx(shared.edgeCoarse1Enc.session, coarse1Raw, shapeEdgeCoarse1) }
         val coarse2LatentFull = timer.measure("edge_encoder_coarse2") { runOnnx(shared.edgeCoarse2Enc.session, coarse2Raw, shapeEdgeCoarse2) }
@@ -355,7 +430,30 @@ object HoodPipelineRunner {
         val worldCat = FloatArray(worldDirectRaw.size + worldInverseRaw.size)
         System.arraycopy(worldDirectRaw, 0, worldCat, 0, worldDirectRaw.size)
         System.arraycopy(worldInverseRaw, 0, worldCat, worldDirectRaw.size, worldInverseRaw.size)
-        val worldLatentCat = timer.measure("edge_encoder_world") { runOnnx(shared.edgeWorldEnc.session, worldCat, shapeWorldCat) }
+        val worldLatentCat = timer.measure("edge_encoder_world") {
+            val splitArtifacts = shared.edgeWorldSplitArtifacts
+            val splitSession = shared.edgeWorldSplitSession
+            if (ENABLE_SPLIT_EDGE_ENCODER_WORLD && splitArtifacts != null && splitSession != null) {
+                require(shapeWorldCat[0].toInt() == splitArtifacts.rows) {
+                    "edge_encoder_world split rows mismatch rows=${shapeWorldCat[0]} artifactRows=${splitArtifacts.rows}"
+                }
+                val mlpBody = timer.measure("edge_encoder_world_split_exec") {
+                    runOnnx(splitSession.session, worldCat, shapeWorldCat)
+                }
+                timer.measure("edge_encoder_world_split_layernorm") {
+                    NativeQairtBridge.applyLayerNorm(
+                        mlpBody,
+                        shapeWorldCat[0].toInt(),
+                        splitArtifacts.outputDim,
+                        splitArtifacts.gamma,
+                        splitArtifacts.beta,
+                        splitArtifacts.eps
+                    )
+                }
+            } else {
+                runOnnx(shared.edgeWorldEnc.session, worldCat, shapeWorldCat)
+            }
+        }
 
         var clothNodes = clothLatent
         var obsNodes = obsLatent
@@ -414,7 +512,7 @@ object HoodPipelineRunner {
             val edgeKeys = step.getJSONArray("edge_keys")
 
             val blockSessions = timer.measure("session_create_blocks") {
-                    getOrCreateBlockSessions(shared, env, assets, filesDir, nativeLibraryDir, profileDir, modelBase, level, block)
+                    getOrCreateBlockSessions(shared, env, assets, filesDir, profileDir, modelBase, level, block)
             }
 
             val worldDirectUpd = timer.measure("block_edge_mlp_world") {
@@ -531,29 +629,60 @@ object HoodPipelineRunner {
             }
 
             val blockNodeCols = latent * (1 + edgeKeys.length())
-            val useNativeBlockNode = shared.nativeBlockNodeMlpReady && level == 0 && block == 0
-            val nodeOutCloth = timer.measure(if (useNativeBlockNode) "block_node_mlp_native" else "block_node_mlp") {
-                if (useNativeBlockNode) {
-                    NativeGpuBridge.runBlockNodeMlp(nodeInCloth, nCloth, blockNodeCols)
-                        ?: runOnnx(blockSessions.node.session, nodeInCloth, longArrayOf(nCloth.toLong(), blockNodeCols.toLong()))
+            val useSplitBlockNode = level == 0 && block == 0 &&
+                ENABLE_SPLIT_BLOCK_0_0_NODE &&
+                shared.block00NodeSplitArtifacts != null &&
+                shared.block00NodeSplitSession != null
+            val nodeOutCloth = timer.measure("block_node_mlp") {
+                if (useSplitBlockNode) {
+                    val splitArtifacts = shared.block00NodeSplitArtifacts!!
+                    val splitSession = shared.block00NodeSplitSession!!
+                    require(nCloth == splitArtifacts.rows) {
+                        "block_0_0_node split cloth rows mismatch rows=$nCloth artifactRows=${splitArtifacts.rows}"
+                    }
+                    val mlpBody = timer.measure("block_0_0_node_split_exec") {
+                        runOnnx(splitSession.session, nodeInCloth, longArrayOf(nCloth.toLong(), blockNodeCols.toLong()))
+                    }
+                    timer.measure("block_0_0_node_split_layernorm") {
+                        NativeQairtBridge.applyLayerNorm(
+                            mlpBody,
+                            nCloth,
+                            splitArtifacts.outputDim,
+                            splitArtifacts.gamma,
+                            splitArtifacts.beta,
+                            splitArtifacts.eps
+                        )
+                    }
                 } else {
-                    runOnnx(blockSessions.node.session, nodeInCloth, longArrayOf(nCloth.toLong(), blockNodeCols.toLong()))
+                    runBlockNode(blockSessions.node.session, nodeInCloth, nCloth, blockNodeCols, maxOf(nCloth, nObs))
                 }
             }
-            val nodeOutObs = timer.measure(if (useNativeBlockNode) "block_node_mlp_native" else "block_node_mlp") {
-                if (useNativeBlockNode) {
-                    NativeGpuBridge.runBlockNodeMlp(nodeInObs, nObs, blockNodeCols)
-                        ?: runOnnx(blockSessions.node.session, nodeInObs, longArrayOf(nObs.toLong(), blockNodeCols.toLong()))
+            val nodeOutObs = timer.measure("block_node_mlp") {
+                if (useSplitBlockNode) {
+                    val splitArtifacts = shared.block00NodeSplitArtifacts!!
+                    val splitSession = shared.block00NodeSplitSession!!
+                    require(nObs <= splitArtifacts.rows) {
+                        "block_0_0_node split obstacle rows mismatch rows=$nObs artifactRows=${splitArtifacts.rows}"
+                    }
+                    val mlpBody = timer.measure("block_0_0_node_split_exec") {
+                        runOnnxPadded(splitSession.session, nodeInObs, nObs, blockNodeCols, splitArtifacts.rows)
+                    }
+                    timer.measure("block_0_0_node_split_layernorm") {
+                        NativeQairtBridge.applyLayerNorm(
+                            mlpBody,
+                            nObs,
+                            splitArtifacts.outputDim,
+                            splitArtifacts.gamma,
+                            splitArtifacts.beta,
+                            splitArtifacts.eps
+                        )
+                    }
                 } else {
-                    runOnnx(blockSessions.node.session, nodeInObs, longArrayOf(nObs.toLong(), blockNodeCols.toLong()))
+                    runBlockNode(blockSessions.node.session, nodeInObs, nObs, blockNodeCols, maxOf(nCloth, nObs))
                 }
             }
 
             if (level == 0 && block == 0) {
-                if (useNativeBlockNode) {
-                    val ortNodeOutCloth = runOnnx(blockSessions.node.session, nodeInCloth, longArrayOf(nCloth.toLong(), blockNodeCols.toLong()))
-                    logIfExpected("block_0_0_node_native_vs_ort", nodeOutCloth, ortNodeOutCloth)
-                }
                 logIfExpected("block_0_0_node_out_cloth", nodeOutCloth, expBlock0NodeOut)
             }
 
@@ -594,21 +723,108 @@ object HoodPipelineRunner {
         env: OrtEnvironment,
         assets: AssetManager,
         filesDir: File,
-        nativeLibraryDir: String,
         profileDir: File,
         modelBase: String
     ): SharedSessions {
+        val nodeEncoderSplit = if (ENABLE_SPLIT_NODE_ENCODER) {
+            loadSplitArtifacts(assets, filesDir, "split_artifacts/node_encoder")
+        } else {
+            null
+        }
+        val edgeMeshSplit = if (ENABLE_SPLIT_EDGE_ENCODER_MESH) {
+            loadSplitArtifacts(assets, filesDir, "split_artifacts/edge_encoder_mesh")
+        } else {
+            null
+        }
+        val edgeWorldSplit = if (ENABLE_SPLIT_EDGE_ENCODER_WORLD) {
+            loadSplitArtifacts(assets, filesDir, "split_artifacts/edge_encoder_world")
+        } else {
+            null
+        }
+        val block00NodeSplit = if (ENABLE_SPLIT_BLOCK_0_0_NODE) {
+            loadSplitArtifacts(assets, filesDir, "split_artifacts/block_0_0_node")
+        } else {
+            null
+        }
+        if (nodeEncoderSplit != null) {
+            Log.i(
+                "HoodOnnxTest",
+                "loaded split node_encoder artifacts rows=${nodeEncoderSplit.first.rows} " +
+                    "inputDim=${nodeEncoderSplit.first.inputDim} outputDim=${nodeEncoderSplit.first.outputDim} " +
+                    "model=${nodeEncoderSplit.second.absolutePath}"
+            )
+        }
+        if (edgeMeshSplit != null) {
+            Log.i(
+                "HoodOnnxTest",
+                "loaded split edge_encoder_mesh artifacts rows=${edgeMeshSplit.first.rows} " +
+                    "inputDim=${edgeMeshSplit.first.inputDim} outputDim=${edgeMeshSplit.first.outputDim} " +
+                    "model=${edgeMeshSplit.second.absolutePath}"
+            )
+        }
+        if (edgeWorldSplit != null) {
+            Log.i(
+                "HoodOnnxTest",
+                "loaded split edge_encoder_world artifacts rows=${edgeWorldSplit.first.rows} " +
+                    "inputDim=${edgeWorldSplit.first.inputDim} outputDim=${edgeWorldSplit.first.outputDim} " +
+                    "model=${edgeWorldSplit.second.absolutePath}"
+            )
+        }
+        if (block00NodeSplit != null) {
+            Log.i(
+                "HoodOnnxTest",
+                "loaded split block_0_0_node artifacts rows=${block00NodeSplit.first.rows} " +
+                    "inputDim=${block00NodeSplit.first.inputDim} outputDim=${block00NodeSplit.first.outputDim} " +
+                    "model=${block00NodeSplit.second.absolutePath}"
+            )
+        }
         return SharedSessions(
-            nodeEnc = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/node_encoder.onnx", "real/node_encoder"),
-            edgeMeshEnc = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/edge_encoder_mesh.onnx", "real/edge_encoder_mesh"),
-            edgeWorldEnc = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/edge_encoder_world.onnx", "real/edge_encoder_world"),
-            edgeCoarse0Enc = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/edge_encoder_coarse0.onnx", "real/edge_encoder_coarse0"),
-            edgeCoarse1Enc = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/edge_encoder_coarse1.onnx", "real/edge_encoder_coarse1"),
-            edgeCoarse2Enc = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/edge_encoder_coarse2.onnx", "real/edge_encoder_coarse2"),
-            decoder = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/node_decoder.onnx", "real/node_decoder"),
-            gpuNodeEncoder = if (ENABLE_GPU_NODE_ENCODER) GpuNodeEncoder.tryCreate(assets) else null,
-            nativeBlockNodeMlpReady = if (ENABLE_NATIVE_BLOCK_NODE_MLP) prepareNativeBlockNodeMlp(assets, filesDir) else false
+            nodeEnc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/node_encoder.onnx", "real/node_encoder"),
+            edgeMeshEnc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_mesh.onnx", "real/edge_encoder_mesh"),
+            edgeWorldEnc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_world.onnx", "real/edge_encoder_world"),
+            edgeCoarse0Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse0.onnx", "real/edge_encoder_coarse0"),
+            edgeCoarse1Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse1.onnx", "real/edge_encoder_coarse1"),
+            edgeCoarse2Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse2.onnx", "real/edge_encoder_coarse2"),
+            decoder = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/node_decoder.onnx", "real/node_decoder"),
+            nodeEncSplitArtifacts = nodeEncoderSplit?.first,
+            nodeEncSplitModelFile = nodeEncoderSplit?.second,
+            nodeEncSplitSession = if (ENABLE_SPLIT_NODE_ENCODER && nodeEncoderSplit != null) {
+                createProfiledSessionFromFile(env, profileDir, nodeEncoderSplit.second, "split/node_encoder_mlp", BackendKind.NNAPI)
+            } else {
+                null
+            },
+            edgeMeshSplitArtifacts = edgeMeshSplit?.first,
+            edgeMeshSplitModelFile = edgeMeshSplit?.second,
+            edgeMeshSplitSession = if (ENABLE_SPLIT_EDGE_ENCODER_MESH && edgeMeshSplit != null) {
+                createProfiledSessionFromFile(env, profileDir, edgeMeshSplit.second, "split/edge_encoder_mesh_mlp", BackendKind.NNAPI)
+            } else {
+                null
+            },
+            edgeWorldSplitArtifacts = edgeWorldSplit?.first,
+            edgeWorldSplitModelFile = edgeWorldSplit?.second,
+            edgeWorldSplitSession = if (ENABLE_SPLIT_EDGE_ENCODER_WORLD && edgeWorldSplit != null) {
+                createProfiledSessionFromFile(env, profileDir, edgeWorldSplit.second, "split/edge_encoder_world_mlp", BackendKind.NNAPI)
+            } else {
+                null
+            },
+            block00NodeSplitArtifacts = block00NodeSplit?.first,
+            block00NodeSplitModelFile = block00NodeSplit?.second,
+            block00NodeSplitSession = if (ENABLE_SPLIT_BLOCK_0_0_NODE && block00NodeSplit != null) {
+                createProfiledSessionFromFile(env, profileDir, block00NodeSplit.second, "split/block_0_0_node_mlp", BackendKind.NNAPI)
+            } else {
+                null
+            }
         )
+    }
+
+    private fun loadSplitArtifacts(
+        assets: AssetManager,
+        filesDir: File,
+        assetBase: String
+    ): Pair<SplitPartitionArtifacts, File>? {
+        val artifacts = SplitArtifactLoader.load(assets, assetBase) ?: return null
+        val modelFile = SplitArtifactLoader.copyModelToFile(assets, filesDir, artifacts)
+        return artifacts to modelFile
     }
 
     private fun closeSharedSessions(shared: SharedSessions) {
@@ -627,10 +843,10 @@ object HoodPipelineRunner {
         closeProfiledSession(shared.edgeCoarse1Enc)
         closeProfiledSession(shared.edgeCoarse2Enc)
         closeProfiledSession(shared.decoder)
-        shared.gpuNodeEncoder?.close()
-        if (shared.nativeBlockNodeMlpReady && NativeGpuBridge.isLoaded()) {
-            NativeGpuBridge.closeBlockNodeMlp()
-        }
+        shared.nodeEncSplitSession?.let { closeProfiledSession(it) }
+        shared.edgeMeshSplitSession?.let { closeProfiledSession(it) }
+        shared.edgeWorldSplitSession?.let { closeProfiledSession(it) }
+        shared.block00NodeSplitSession?.let { closeProfiledSession(it) }
     }
 
     private fun getOrCreateBlockSessions(
@@ -638,7 +854,6 @@ object HoodPipelineRunner {
         env: OrtEnvironment,
         assets: AssetManager,
         filesDir: File,
-        nativeLibraryDir: String,
         profileDir: File,
         modelBase: String,
         level: Int,
@@ -648,67 +863,21 @@ object HoodPipelineRunner {
         return shared.blockSessions.getOrPut(key) {
             val labelBase = "real/block_${level}_${block}"
             BlockSessions(
-                node = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/blocks/block_${level}_${block}_node.onnx", "$labelBase/node"),
-                world = createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_world_edge.onnx", "$labelBase/edge_world"),
+                node = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/blocks/block_${level}_${block}_node.onnx", "$labelBase/node"),
+                world = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_world_edge.onnx", "$labelBase/edge_world"),
                 mesh = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_mesh_edge.onnx")) {
-                    createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_mesh_edge.onnx", "$labelBase/edge_mesh")
+                    createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_mesh_edge.onnx", "$labelBase/edge_mesh")
                 } else null,
                 coarse0 = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge0.onnx")) {
-                    createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge0.onnx", "$labelBase/edge_coarse0")
+                    createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge0.onnx", "$labelBase/edge_coarse0")
                 } else null,
                 coarse1 = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge1.onnx")) {
-                    createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge1.onnx", "$labelBase/edge_coarse1")
+                    createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge1.onnx", "$labelBase/edge_coarse1")
                 } else null,
                 coarse2 = if (assetExists(assets, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge2.onnx")) {
-                    createProfiledSession(env, assets, filesDir, nativeLibraryDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge2.onnx", "$labelBase/edge_coarse2")
+                    createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/blocks/block_${level}_${block}_edge_coarse_edge2.onnx", "$labelBase/edge_coarse2")
                 } else null
             )
-        }
-    }
-
-    private fun createRelaxedSession(
-        env: OrtEnvironment,
-        assets: AssetManager,
-        filesDir: File,
-        nativeLibraryDir: String,
-        assetName: String
-    ): OrtSession {
-        val opts = OrtSession.SessionOptions()
-        if (ENABLE_QNN) {
-            opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.NO_OPT)
-            configureRealPipelineProvider(opts, assets, filesDir, nativeLibraryDir)
-        }
-        return env.createSession(copyAssetToFile(assets, filesDir, assetName).absolutePath, opts)
-    }
-
-    private fun prepareNativeBlockNodeMlp(
-        assets: AssetManager,
-        filesDir: File
-    ): Boolean {
-        if (!NativeGpuBridge.isLoaded()) return false
-        val manifestAsset = "gpu/block_0_0_node/manifest.json"
-        if (!assetExists(assets, manifestAsset)) return false
-        val outDir = File(filesDir, "gpu/block_0_0_node")
-        outDir.mkdirs()
-        val files = arrayOf(
-            "manifest.json",
-            "linear0_weight.bin",
-            "linear0_bias.bin",
-            "linear1_weight.bin",
-            "linear1_bias.bin",
-            "linear2_weight.bin",
-            "linear2_bias.bin",
-            "layernorm_gamma.bin",
-            "layernorm_beta.bin"
-        )
-        for (name in files) {
-            copyAssetToFile(assets, filesDir, "gpu/block_0_0_node/$name")
-        }
-        return try {
-            NativeGpuBridge.initBlockNodeMlp(outDir.absolutePath)
-        } catch (t: Throwable) {
-            Log.w("HoodOnnxTest", "Failed to init native block node MLP: ${t.message}")
-            false
         }
     }
 
@@ -1351,97 +1520,53 @@ object HoodPipelineRunner {
     private fun crossY(ax: Float, ay: Float, az: Float, bx: Float, by: Float, bz: Float): Float = az * bx - ax * bz
     private fun crossZ(ax: Float, ay: Float, az: Float, bx: Float, by: Float, bz: Float): Float = ax * by - ay * bx
 
+    private enum class BackendKind {
+        CPU,
+        NNAPI
+    }
+
     private fun createProfiledSession(
         env: OrtEnvironment,
         assets: AssetManager,
         filesDir: File,
-        nativeLibraryDir: String,
         profileDir: File,
         assetName: String,
         label: String
     ): ProfiledSession {
+        val modelFile = copyAssetToFile(assets, filesDir, assetName)
+        return createProfiledSessionFromFile(
+            env = env,
+            profileDir = profileDir,
+            modelFile = modelFile,
+            label = label,
+            backend = BackendKind.CPU
+        )
+    }
+
+    private fun createProfiledSessionFromFile(
+        env: OrtEnvironment,
+        profileDir: File,
+        modelFile: File,
+        label: String,
+        backend: BackendKind
+    ): ProfiledSession {
         val opts = OrtSession.SessionOptions()
-        if (ENABLE_QNN) {
-            opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.NO_OPT)
-            configureRealPipelineProvider(opts, assets, filesDir, nativeLibraryDir)
+        when (backend) {
+            BackendKind.NNAPI -> opts.addNnapi()
+            BackendKind.CPU -> {}
         }
         opts.setSessionLogLevel(OrtLoggingLevel.ORT_LOGGING_LEVEL_WARNING)
         val profileFile = File(profileDir, "ort_profile_${label.replace('/', '_')}.json")
         opts.enableProfiling(profileFile.absolutePath)
-        val session = env.createSession(copyAssetToFile(assets, filesDir, assetName).absolutePath, opts)
+        val session = env.createSession(modelFile.absolutePath, opts)
         return ProfiledSession(label, session)
-    }
-
-    private fun configureRealPipelineProvider(
-        opts: OrtSession.SessionOptions,
-        assets: AssetManager,
-        filesDir: File,
-        nativeLibraryDir: String
-    ) {
-        val skelDir = prepareQnnSkels(assets, filesDir)
-        try {
-            Os.setenv("ADSP_LIBRARY_PATH", skelDir.absolutePath, true)
-        } catch (t: Throwable) {
-            Log.w("HoodOnnxTest", "Failed to set ADSP_LIBRARY_PATH=${skelDir.absolutePath}", t)
-        }
-
-        val backendPath = File(nativeLibraryDir, "libQnnHtp.so").absolutePath
-        val providerOptionsKeys = arrayOf("backend_path")
-        val providerOptionsValues = arrayOf(backendPath)
-
-        try {
-            val providerOptionsClass = Class.forName("ai.onnxruntime.OrtProviderOptions")
-            val getApiHandle = providerOptionsClass.getDeclaredMethod("getApiHandle")
-            getApiHandle.isAccessible = true
-            val apiHandle = getApiHandle.invoke(null) as Long
-
-            val getNativeHandle = OrtSession.SessionOptions::class.java.getDeclaredMethod("getNativeHandle")
-            getNativeHandle.isAccessible = true
-            val nativeHandle = getNativeHandle.invoke(opts) as Long
-
-            val addExecutionProvider = OrtSession.SessionOptions::class.java.getDeclaredMethod(
-                "addExecutionProvider",
-                java.lang.Long.TYPE,
-                java.lang.Long.TYPE,
-                String::class.java,
-                Array<String>::class.java,
-                Array<String>::class.java
-            )
-            addExecutionProvider.isAccessible = true
-            addExecutionProvider.invoke(opts, apiHandle, nativeHandle, "QNN", providerOptionsKeys, providerOptionsValues)
-        } catch (t: Throwable) {
-            throw RuntimeException("Failed to configure QNN execution provider", t)
-        }
-    }
-
-    private fun prepareQnnSkels(assets: AssetManager, filesDir: File): File {
-        val outDir = File(filesDir, "qnn_htp")
-        outDir.mkdirs()
-        val skelAssets = arrayOf(
-            "qnn/hexagon-v68/unsigned/libQnnHtpV68Skel.so",
-            "qnn/hexagon-v69/unsigned/libQnnHtpV69Skel.so",
-            "qnn/hexagon-v73/unsigned/libQnnHtpV73Skel.so",
-            "qnn/hexagon-v75/unsigned/libQnnHtpV75Skel.so",
-            "qnn/hexagon-v79/unsigned/libQnnHtpV79Skel.so",
-            "qnn/hexagon-v81/unsigned/libQnnHtpV81Skel.so"
-        )
-        for (asset in skelAssets) {
-            val name = asset.substringAfterLast('/')
-            val outFile = File(outDir, name)
-            if (outFile.exists()) continue
-            assets.open(asset).use { input ->
-                outFile.outputStream().use { output -> input.copyTo(output) }
-            }
-        }
-        return outDir
     }
 
     private fun closeProfiledSession(profiled: ProfiledSession) {
         try {
-            val profilePath = profiled.session.endProfiling()
-            Log.i("HoodOnnxTest", "${profiled.label} ${summarizeProfile(profilePath)}")
-        } catch (t: Throwable) {
-            Log.w("HoodOnnxTest", "${profiled.label} profile summary failed", t)
+            profiled.session.endProfiling()
+        } catch (_: Throwable) {
+            // ignore profiling shutdown issues during cleanup
         } finally {
             profiled.session.close()
         }
@@ -1567,8 +1692,12 @@ object HoodPipelineRunner {
                 System.arraycopy(edgeFeat, edgeBase, input, inBase + latent * 2, latent)
                 localEdge++
             }
-            val shape = longArrayOf(chunkEdges.toLong(), (latent * 3).toLong())
-            val chunkOut = runOnnx(session, input, shape)
+            val cols = latent * 3
+            val chunkOut = if (ENABLE_DUMMY_MODEL_SET) {
+                runOnnxPadded(session, input, chunkEdges, cols, EDGE_MLP_CHUNK_EDGES)
+            } else {
+                runOnnx(session, input, longArrayOf(chunkEdges.toLong(), cols.toLong()))
+            }
             System.arraycopy(chunkOut, 0, output, edgeStart * latent, chunkOut.size)
             edgeStart += chunkEdges
         }
@@ -1608,7 +1737,6 @@ object HoodPipelineRunner {
                     val src = node * latent
                     System.arraycopy(block, src, out, dst, latent)
                 }
-                // else leave zeros
                 dst += latent
             }
         }
@@ -1631,6 +1759,27 @@ object HoodPipelineRunner {
         return max
     }
 
+    private fun buildExpectedCombinedLatent(
+        nCloth: Int,
+        nObs: Int,
+        latent: Int,
+        activeMask: IntArray,
+        expectedCloth: FloatArray,
+        expectedObstacle: FloatArray
+    ): FloatArray {
+        val nActiveObs = activeMask.count { it != 0 }
+        val combined = FloatArray((nCloth + nActiveObs) * latent)
+        System.arraycopy(expectedCloth, 0, combined, 0, expectedCloth.size)
+        var write = nCloth * latent
+        for (obsIdx in 0 until nObs) {
+            if (activeMask.getOrElse(obsIdx) { 0 } == 0) continue
+            val src = obsIdx * latent
+            System.arraycopy(expectedObstacle, src, combined, write, latent)
+            write += latent
+        }
+        return combined
+    }
+
     private fun runOnnx(session: OrtSession, input: FloatArray, shape: LongArray): FloatArray {
         val inputName = session.inputNames.first()
         val inputTensor = OnnxTensor.createTensor(OrtEnvironment.getEnvironment(), toFloatBuffer(input), shape)
@@ -1644,18 +1793,56 @@ object HoodPipelineRunner {
         } else {
             flattenTensorValue(outputTensor.value, expectedElements)
         }
-        if (out.size != expectedElements) {
-            Log.e(
-                "HoodOnnxTest",
-                "runOnnx size mismatch inputShape=${shape.joinToString(prefix = "[", postfix = "]")} " +
-                    "outputShape=${outputTensor.info.shape.joinToString(prefix = "[", postfix = "]")} " +
-                    "expectedElements=$expectedElements actual=${out.size}"
-            )
-        }
         outputTensor.close()
         inputTensor.close()
         results.close()
         return out
+    }
+
+    private fun runOnnxPadded(
+        session: OrtSession,
+        input: FloatArray,
+        rows: Int,
+        cols: Int,
+        paddedRows: Int
+    ): FloatArray {
+        if (rows == paddedRows) {
+            return runOnnx(session, input, longArrayOf(rows.toLong(), cols.toLong()))
+        }
+        require(rows < paddedRows) { "rows=$rows paddedRows=$paddedRows" }
+        val padded = FloatArray(paddedRows * cols)
+        System.arraycopy(input, 0, padded, 0, input.size)
+        val out = runOnnx(session, padded, longArrayOf(paddedRows.toLong(), cols.toLong()))
+        val outCols = out.size / paddedRows
+        return out.copyOf(rows * outCols)
+    }
+
+    private fun runNodeEncoder(
+        session: OrtSession,
+        input: FloatArray,
+        rows: Int,
+        cols: Int,
+        paddedRows: Int
+    ): FloatArray {
+        return if (ENABLE_DUMMY_MODEL_SET) {
+            runOnnxPadded(session, input, rows, cols, paddedRows)
+        } else {
+            runOnnx(session, input, longArrayOf(rows.toLong(), cols.toLong()))
+        }
+    }
+
+    private fun runBlockNode(
+        session: OrtSession,
+        input: FloatArray,
+        rows: Int,
+        cols: Int,
+        paddedRows: Int
+    ): FloatArray {
+        return if (ENABLE_DUMMY_MODEL_SET) {
+            runOnnxPadded(session, input, rows, cols, paddedRows)
+        } else {
+            runOnnx(session, input, longArrayOf(rows.toLong(), cols.toLong()))
+        }
     }
 
     private fun flattenTensorValue(value: Any?, expectedElements: Int): FloatArray {
@@ -1816,37 +2003,4 @@ object HoodPipelineRunner {
         return outFile
     }
 
-    private fun summarizeProfile(profilePath: String): String {
-        return try {
-            val text = File(profilePath).readText()
-            val arr = JSONArray(text)
-            val providerCounts = mutableMapOf<String, Int>()
-            val cpuOps = mutableSetOf<String>()
-            val nnapiOps = mutableSetOf<String>()
-            val qnnOps = mutableSetOf<String>()
-
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                if (obj.optString("cat") != "Node") continue
-                val args = obj.optJSONObject("args") ?: continue
-                val opName = args.optString("op_name", "")
-                val provider = args.optString("provider", "")
-                if (opName.isEmpty() || provider.isEmpty()) continue
-                providerCounts[provider] = (providerCounts[provider] ?: 0) + 1
-                if (provider.contains("CPU")) cpuOps.add(opName)
-                if (provider.contains("Nnapi")) nnapiOps.add(opName)
-                if (provider.contains("QNN")) qnnOps.add(opName)
-            }
-
-            val providerSummary = providerCounts.entries
-                .sortedByDescending { it.value }
-                .joinToString(", ") { "${it.key}=${it.value}" }
-            val qnnList = qnnOps.toList().sorted().joinToString(", ")
-            val nnapiList = nnapiOps.toList().sorted().joinToString(", ")
-            val cpuList = cpuOps.toList().sorted().joinToString(", ")
-            "providers: $providerSummary; QNN ops: [$qnnList]; NNAPI ops: [$nnapiList]; CPU ops: [$cpuList]"
-        } catch (t: Throwable) {
-            "profile summary failed: ${t.message}"
-        }
-    }
 }

@@ -1,0 +1,17 @@
+{
+  "source_model": "/Users/jan.rojc/Documents/MagCode/Android/HoodOnnxTest/app/src/main/assets/models_dynamic/node_encoder.onnx",
+  "rows": 9631,
+  "input_dim": 24,
+  "hidden_dim": 128,
+  "output_dim": 128,
+  "layernorm_dim": 128,
+  "layernorm_eps": 1e-05,
+  "pattern": "qairt_mlp_body_plus_cpu_layernorm",
+  "files": {
+    "mlp_body_onnx": "mlp_body.onnx",
+    "layernorm_gamma": "layernorm_gamma.bin",
+    "layernorm_beta": "layernorm_beta.bin",
+    "mlp_body_expected": "mlp_body_expected.raw",
+    "mlp_body_expected_shape": "mlp_body_expected_shape.json"
+  }
+}

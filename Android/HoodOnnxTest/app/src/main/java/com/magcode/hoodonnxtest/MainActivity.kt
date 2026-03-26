@@ -4,17 +4,11 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.os.Bundle
+import android.text.method.ScrollingMovementMethod
 import android.util.Log
 import android.widget.TextView
-import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
-import ai.onnxruntime.OrtLoggingLevel
-import ai.onnxruntime.OrtSession
-import org.json.JSONArray
 import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import android.text.method.ScrollingMovementMethod
 
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,149 +44,17 @@ class MainActivity : Activity() {
         }
 
         val pipelineProfileDir = getExternalFilesDir(null) ?: filesDir
-        val pipelineLine = HoodPipelineRunner.run(assets, filesDir, applicationInfo.nativeLibraryDir, env, pipelineProfileDir)
+        val pipelineLine = HoodPipelineRunner.run(
+            assets,
+            filesDir,
+            env,
+            pipelineProfileDir
+        )
         reportLines.add(pipelineLine)
+
         val reportText = reportLines.joinToString(separator = "\n")
         copyToClipboard(reportText)
-
         return reportText
-    }
-
-    private fun runProbes(): List<String> {
-        val probes = readOptionalJsonArray("probes.json") ?: return emptyList()
-        val env = OrtEnvironment.getEnvironment()
-        val opts = OrtSession.SessionOptions()
-        opts.addNnapi()
-        opts.addConfigEntry("session.disable_cpu_ep_fallback", "1")
-
-        val lines = mutableListOf<String>()
-        for (i in 0 until probes.length()) {
-            val p = probes.getJSONObject(i)
-            val name = p.getString("name")
-            val modelPath = copyAssetToFile(p.getString("model"))
-            val inputShape = readShapeJson(p.getString("input_shape"))
-            val inputData = readFloatBinary(p.getString("input_bin"))
-            try {
-                val session = env.createSession(modelPath.absolutePath, opts)
-                val inputName = session.inputNames.first()
-                val inputTensor = OnnxTensor.createTensor(env, toFloatBuffer(inputData), inputShape)
-                session.run(mapOf(inputName to inputTensor)).close()
-                session.close()
-                val line = "OK $name"
-                lines.add(line)
-                Log.i("HoodOnnxTest", line)
-            } catch (t: Throwable) {
-                val diag = runDiagnostics(name, modelPath, inputData, inputShape)
-                val line = "FAIL $name. $diag"
-                lines.add(line)
-                Log.e("HoodOnnxTest", line, t)
-            }
-        }
-        return lines
-    }
-
-    private fun runDiagnostics(
-        name: String,
-        modelPath: File,
-        inputData: FloatArray,
-        inputShape: LongArray
-    ): String {
-        return try {
-            val env = OrtEnvironment.getEnvironment()
-            val opts = OrtSession.SessionOptions()
-            opts.addNnapi()
-            opts.setSessionLogLevel(OrtLoggingLevel.ORT_LOGGING_LEVEL_VERBOSE)
-            opts.setSessionLogVerbosityLevel(1)
-            // allow CPU fallback for diagnostics
-
-            val safeName = name.replace('/', '_')
-            val profileFile = File(getExternalFilesDir(null), "ort_profile_${safeName}.json")
-            opts.enableProfiling(profileFile.absolutePath)
-
-            val session = env.createSession(modelPath.absolutePath, opts)
-            val inputName = session.inputNames.first()
-            val inputTensor = OnnxTensor.createTensor(env, toFloatBuffer(inputData), inputShape)
-            session.run(mapOf(inputName to inputTensor)).close()
-            val profilePath = session.endProfiling()
-            session.close()
-
-            val summary = summarizeProfile(profilePath)
-            val summaryFile = File(getExternalFilesDir(null), "ort_profile_${safeName}_summary.txt")
-            summaryFile.writeText(summary)
-
-            "diagnostic profile at $profilePath\nsummary: $summary\nsummary file: ${summaryFile.absolutePath}"
-        } catch (e: Throwable) {
-            "diagnostic failed: ${e.message}"
-        }
-    }
-
-    private fun toFloatBuffer(data: FloatArray): java.nio.FloatBuffer {
-        val bb = ByteBuffer.allocateDirect(data.size * 4).order(ByteOrder.LITTLE_ENDIAN)
-        val fb = bb.asFloatBuffer()
-        fb.put(data)
-        fb.rewind()
-        return fb
-    }
-
-    private fun readTests(): JSONArray {
-        val text = assets.open("tests.json").bufferedReader().use { it.readText() }
-        return JSONArray(text)
-    }
-
-    private fun readOptionalJsonArray(name: String): JSONArray? {
-        return try {
-            val text = assets.open(name).bufferedReader().use { it.readText() }
-            JSONArray(text)
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun readShapeJson(name: String): LongArray {
-        val text = assets.open(name).bufferedReader().use { it.readText() }
-        val arr = JSONArray(text)
-        val out = LongArray(arr.length())
-        for (i in 0 until arr.length()) {
-            out[i] = arr.getLong(i)
-        }
-        return out
-    }
-
-    private fun readFloatBinary(name: String): FloatArray {
-        val bytes = assets.open(name).readBytes()
-        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-        val out = FloatArray(bytes.size / 4)
-        for (i in out.indices) {
-            out[i] = buf.float
-        }
-        return out
-    }
-
-    private fun copyAssetToFile(assetName: String): File {
-        val outFile = File(filesDir, assetName)
-        if (outFile.exists()) return outFile
-        outFile.parentFile?.mkdirs()
-        assets.open(assetName).use { input ->
-            outFile.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
-
-        // also copy external data if present
-        val dataAsset = assetName + ".data"
-        try {
-            assets.open(dataAsset).use { input ->
-                val dataFile = File(filesDir, dataAsset)
-                dataFile.parentFile?.mkdirs()
-                dataFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-        } catch (_: Exception) {
-            // no external data
-        }
-
-        return outFile
     }
 
     private fun writeError(t: Throwable) {
@@ -211,41 +73,6 @@ class MainActivity : Activity() {
             clipboard.setPrimaryClip(clip)
         } catch (_: Exception) {
             // ignore
-        }
-    }
-
-    private fun summarizeProfile(profilePath: String): String {
-        return try {
-            val text = File(profilePath).readText()
-            val arr = JSONArray(text)
-            val providerCounts = mutableMapOf<String, Int>()
-            val cpuOps = mutableSetOf<String>()
-            val nnapiOps = mutableSetOf<String>()
-            val qnnOps = mutableSetOf<String>()
-
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                if (obj.optString("cat") != "Node") continue
-                val args = obj.optJSONObject("args") ?: continue
-                val opName = args.optString("op_name", "")
-                val provider = args.optString("provider", "")
-                if (opName.isEmpty() || provider.isEmpty()) continue
-                providerCounts[provider] = (providerCounts[provider] ?: 0) + 1
-                if (provider.contains("CPU")) cpuOps.add(opName)
-                if (provider.contains("Nnapi")) nnapiOps.add(opName)
-                if (provider.contains("QNN")) qnnOps.add(opName)
-            }
-
-            val providerSummary = providerCounts.entries
-                .sortedByDescending { it.value }
-                .joinToString(", ") { "${it.key}=${it.value}" }
-            val qnnList = qnnOps.toList().sorted().joinToString(", ")
-            val nnapiList = nnapiOps.toList().sorted().joinToString(", ")
-            val cpuList = cpuOps.toList().sorted().joinToString(", ")
-
-            "providers: $providerSummary; QNN ops: [$qnnList]; NNAPI ops: [$nnapiList]; CPU ops: [$cpuList]"
-        } catch (e: Throwable) {
-            "profile summary failed: ${e.message}"
         }
     }
 }

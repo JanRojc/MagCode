@@ -47,9 +47,15 @@ Android/HoodOnnxTest/app/src/main/assets/output*
 Android/HoodOnnxTest/local.properties
 Android/HoodOnnxTest/.idea/
 Android/HoodOnnxTest/app/libs/onnxruntime-release.aar
+Android/HoodOnnxTest/app/libs/backups/
 Android/HoodOnnxTest/app/src/main/assets/pipeline_real/
 Android/HoodOnnxTest/app/src/main/assets/pipeline_real_sequence/
+Android/HoodOnnxTest/app/src/main/assets/split_artifacts/*
+!Android/HoodOnnxTest/app/src/main/assets/split_artifacts/node_encoder/
+!Android/HoodOnnxTest/app/src/main/assets/split_artifacts/node_encoder/**
 Android/HoodOnnxTest/app/src/main/cpp/ort_headers/
+Android/HoodOnnxTest/tools/node_encoder_worker_device.sh
+Android/HoodOnnxTest/tools/stage_node_encoder_split_runtime.sh
 Android/Qnn*Case/
 Android/QnnSmokeTest/
 Android/SplitArtifacts/
