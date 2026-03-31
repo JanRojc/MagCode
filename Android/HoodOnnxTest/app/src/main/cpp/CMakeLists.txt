@@ -17,6 +17,7 @@ add_library(
 find_library(log-lib log)
 find_library(android-lib android)
 find_library(dl-lib dl)
+find_library(neuralnetworks-lib neuralnetworks)
 
 target_compile_features(hood_gpu PRIVATE cxx_std_17)
 target_include_directories(
@@ -36,4 +37,5 @@ target_link_libraries(
     ${log-lib}
     ${android-lib}
     ${dl-lib}
+    ${neuralnetworks-lib}
 )

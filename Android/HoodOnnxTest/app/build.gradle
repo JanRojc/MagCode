@@ -3,6 +3,10 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+def qnnNodeEncoderCaseDir = file("${rootDir}/../QnnNodeEncoderMlpBodyCase")
+def qnnBlock000NodeCaseDir = file("${rootDir}/../QnnBlock000NodeCase")
+def generatedQnnAssetRoot = file("$buildDir/generated/qnnNodeEncoderAssets")
+
 android {
     namespace 'com.magcode.hoodonnxtest'
     compileSdk 34
@@ -54,8 +58,32 @@ android {
             path file('src/main/cpp/CMakeLists.txt')
         }
     }
+
+    sourceSets {
+        main {
+            assets.srcDir(generatedQnnAssetRoot)
+        }
+    }
 }
+
+tasks.register('syncQnnNodeEncoderCaseAssets', Copy) {
+    from(qnnNodeEncoderCaseDir)
+    into(new File(generatedQnnAssetRoot, 'qnn_node_encoder_case'))
+}
+
+tasks.register('syncQnnBlock000NodeCaseAssets', Copy) {
+    from(qnnBlock000NodeCaseDir)
+    into(new File(generatedQnnAssetRoot, 'qnn_block_0_0_node_case'))
+}
+
+preBuild.dependsOn(
+    tasks.named('syncQnnNodeEncoderCaseAssets'),
+    tasks.named('syncQnnBlock000NodeCaseAssets')
+)
 
 dependencies {
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.24.2'
+    implementation 'com.google.ai.edge.litert:litert:1.4.1'
+    implementation 'com.google.ai.edge.litert:litert-gpu:1.4.1'
+    implementation 'com.google.ai.edge.litert:litert-gpu-api:1.4.1'
 }

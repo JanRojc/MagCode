@@ -16,8 +16,9 @@ object HoodPipelineRunner {
     private const val EDGE_MLP_CHUNK_EDGES = 4096
     private const val ENABLE_DUMMY_MODEL_SET = false
     private const val ENABLE_SINGLE_SEQUENCE_FRAME = true
+    private const val ENABLE_QNN_NODE_ENCODER = true
     // Split flags mean: run the exported MLP body on NNAPI, then apply LayerNorm on CPU.
-    private const val ENABLE_SPLIT_NODE_ENCODER = true
+    private const val ENABLE_SPLIT_NODE_ENCODER = false
     private const val ENABLE_SPLIT_EDGE_ENCODER_MESH = false
     private const val ENABLE_SPLIT_EDGE_ENCODER_WORLD = false
     private const val ENABLE_SPLIT_BLOCK_0_0_NODE = false
@@ -35,6 +36,7 @@ object HoodPipelineRunner {
         val edgeCoarse1Enc: ProfiledSession,
         val edgeCoarse2Enc: ProfiledSession,
         val decoder: ProfiledSession,
+        val qnnNodeEncoderReady: Boolean = false,
         val nodeEncSplitArtifacts: SplitPartitionArtifacts? = null,
         val nodeEncSplitModelFile: File? = null,
         val nodeEncSplitSession: ProfiledSession? = null,
@@ -315,6 +317,19 @@ object HoodPipelineRunner {
         val expBlock0AggWorld = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/blocks/block_0_0_agg_world_cloth.bin") else null
         val expBlock0AggMesh = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/blocks/block_0_0_agg_mesh.bin") else null
         val expBlock0AggCoarse0 = if (logIntermediate) readFloatBinarySafe(assets, "$assetBase/blocks/block_0_0_agg_coarse0.bin") else null
+        val expNodeEncCombinedInput = if (logIntermediate) {
+            readFloatBinarySafe(assets, "split_artifacts/node_encoder/node_encoder_input.raw")
+        } else {
+            null
+        }
+        val expNodeEncCombinedOutput = if (logIntermediate) {
+            readFloatBinarySafe(assets, "qnn_node_encoder_case/expected_output.raw")
+                ?: readFloatBinarySafe(assets, "qnn_node_encoder_case/expected_node_encoder_output.raw")
+                ?: readFloatBinarySafe(assets, "qnn_node_encoder_case/node_encoder_hybrid_output.raw")
+                ?: readFloatBinarySafe(assets, "qnn_node_encoder_case/node_encoder_probe_expected.raw")
+        } else {
+            null
+        }
 
         val shapeClothRaw = longArrayOf(nCloth.toLong(), (clothRaw.size / nCloth).toLong())
         val shapeEdgeMesh = longArrayOf((edgeIndexMesh.size / 2).toLong(), (meshRaw.size / (edgeIndexMesh.size / 2)).toLong())
@@ -337,11 +352,33 @@ object HoodPipelineRunner {
             System.arraycopy(obstacleRaw, src, combinedNodeRaw, activeWrite, nodeFeatureDim)
             activeWrite += nodeFeatureDim
         }
+        if (logIntermediate && expNodeEncCombinedInput != null) {
+            Log.i("HoodOnnxTest", "node_encoder_input_combined max_abs_diff=${maxAbsDiff(combinedNodeRaw, expNodeEncCombinedInput)}")
+        }
         val combinedLatent = timer.measure("node_encoder") {
             val rows = nCloth + nActiveObs
             val splitArtifacts = shared.nodeEncSplitArtifacts
             val splitSession = shared.nodeEncSplitSession
-            if (ENABLE_SPLIT_NODE_ENCODER && splitArtifacts != null && splitSession != null) {
+            if (shared.qnnNodeEncoderReady && splitArtifacts != null) {
+                try {
+                    val mlpBody = timer.measure("node_encoder_qnn_exec") {
+                        NativeQairtBridge.runCachedQnnNodeEncoderCaseInput(combinedNodeRaw)
+                    }
+                    timer.measure("node_encoder_qnn_layernorm") {
+                        NativeQairtBridge.applyLayerNorm(
+                            mlpBody,
+                            rows,
+                            splitArtifacts.outputDim,
+                            splitArtifacts.gamma,
+                            splitArtifacts.beta,
+                            splitArtifacts.eps
+                        )
+                    }
+                } catch (t: Throwable) {
+                    Log.w("HoodOnnxTest", "QNN cached node encoder failed, falling back to ORT: ${t.message}")
+                    runNodeEncoder(shared.nodeEnc.session, combinedNodeRaw, rows, nodeFeatureDim, nCloth + nObs)
+                }
+            } else if (ENABLE_SPLIT_NODE_ENCODER && splitArtifacts != null && splitSession != null) {
                 try {
                     require(rows == splitArtifacts.rows) {
                         "node_encoder split rows mismatch rows=$rows artifactRows=${splitArtifacts.rows}"
@@ -376,7 +413,7 @@ object HoodPipelineRunner {
             )
             error("node_encoder output size mismatch")
         }
-        if (logIntermediate && ENABLE_SPLIT_NODE_ENCODER && shared.nodeEncSplitSession != null && expNodeEncCloth != null && expNodeEncObs != null) {
+        if (logIntermediate && (shared.qnnNodeEncoderReady || (ENABLE_SPLIT_NODE_ENCODER && shared.nodeEncSplitSession != null)) && expNodeEncCloth != null && expNodeEncObs != null) {
             val expectedCombined = buildExpectedCombinedLatent(
                 nCloth = nCloth,
                 nObs = nObs,
@@ -385,7 +422,20 @@ object HoodPipelineRunner {
                 expectedCloth = expNodeEncCloth,
                 expectedObstacle = expNodeEncObs
             )
-            Log.i("HoodOnnxTest", "node_encoder_split_combined max_abs_diff=${maxAbsDiff(combinedLatent, expectedCombined)}")
+            val label = if (shared.qnnNodeEncoderReady) "node_encoder_qnn_combined" else "node_encoder_split_combined"
+            Log.i("HoodOnnxTest", "$label max_abs_diff=${maxAbsDiff(combinedLatent, expectedCombined)}")
+            if (shared.qnnNodeEncoderReady && expNodeEncCombinedOutput != null) {
+                Log.i(
+                    "HoodOnnxTest",
+                    "node_encoder_pipeline_vs_qnn_case_expected max_abs_diff=${maxAbsDiff(expectedCombined, expNodeEncCombinedOutput)}"
+                )
+            }
+        }
+        if (logIntermediate && shared.qnnNodeEncoderReady && expNodeEncCombinedOutput != null) {
+            Log.i(
+                "HoodOnnxTest",
+                "node_encoder_qnn_case_expected max_abs_diff=${maxAbsDiff(combinedLatent, expNodeEncCombinedOutput)}"
+            )
         }
         val clothLatent = combinedLatent.copyOfRange(0, nCloth * latent)
         val obsLatent = FloatArray(nObs * latent)
@@ -726,7 +776,23 @@ object HoodPipelineRunner {
         profileDir: File,
         modelBase: String
     ): SharedSessions {
-        val nodeEncoderSplit = if (ENABLE_SPLIT_NODE_ENCODER) {
+        var qnnNodeEncoderReady = false
+        if (ENABLE_QNN_NODE_ENCODER && assetDirExists(assets, "qnn_node_encoder_case")) {
+            try {
+                val qnnBundleDir = File(filesDir, "qnn_node_encoder_case")
+                copyAssetTree(assets, "qnn_node_encoder_case", qnnBundleDir)
+                val initResult = NativeQairtBridge.initCachedQnnNodeEncoderCase(qnnBundleDir.absolutePath)
+                Log.i("HoodOnnxTest", "qnn/node_encoder_pipeline_init: $initResult")
+                qnnNodeEncoderReady =
+                    initResult.contains("backendCreate=0") &&
+                    initResult.contains("graphFinalize=0") &&
+                    initResult.contains("setupInput=OK") &&
+                    initResult.contains("setupOutput=OK")
+            } catch (t: Throwable) {
+                Log.w("HoodOnnxTest", "qnn/node_encoder_pipeline_init failed: ${t.message}")
+            }
+        }
+        val nodeEncoderSplit = if (ENABLE_SPLIT_NODE_ENCODER || ENABLE_QNN_NODE_ENCODER) {
             loadSplitArtifacts(assets, filesDir, "split_artifacts/node_encoder")
         } else {
             null
@@ -786,6 +852,7 @@ object HoodPipelineRunner {
             edgeCoarse1Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse1.onnx", "real/edge_encoder_coarse1"),
             edgeCoarse2Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse2.onnx", "real/edge_encoder_coarse2"),
             decoder = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/node_decoder.onnx", "real/node_decoder"),
+            qnnNodeEncoderReady = qnnNodeEncoderReady,
             nodeEncSplitArtifacts = nodeEncoderSplit?.first,
             nodeEncSplitModelFile = nodeEncoderSplit?.second,
             nodeEncSplitSession = if (ENABLE_SPLIT_NODE_ENCODER && nodeEncoderSplit != null) {
@@ -828,6 +895,13 @@ object HoodPipelineRunner {
     }
 
     private fun closeSharedSessions(shared: SharedSessions) {
+        if (shared.qnnNodeEncoderReady) {
+            try {
+                Log.i("HoodOnnxTest", "qnn/node_encoder_pipeline_release: ${NativeQairtBridge.releaseCachedQnnNodeEncoderCase()}")
+            } catch (t: Throwable) {
+                Log.w("HoodOnnxTest", "qnn/node_encoder_pipeline_release failed: ${t.message}")
+            }
+        }
         for (block in shared.blockSessions.values) {
             closeProfiledSession(block.node)
             closeProfiledSession(block.world)
@@ -1940,6 +2014,14 @@ object HoodPipelineRunner {
         }
     }
 
+    private fun assetDirExists(assets: AssetManager, assetPath: String): Boolean {
+        return try {
+            assets.list(assetPath) != null
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun logIfExpected(tag: String, actual: FloatArray, expected: FloatArray?) {
         if (expected == null) return
         val diff = maxAbsDiff(actual, expected)
@@ -2001,6 +2083,23 @@ object HoodPipelineRunner {
             // no external data
         }
         return outFile
+    }
+
+    private fun copyAssetTree(assets: AssetManager, assetPath: String, outPath: File) {
+        val children = assets.list(assetPath) ?: emptyArray()
+        if (children.isEmpty()) {
+            outPath.parentFile?.mkdirs()
+            assets.open(assetPath).use { input ->
+                outPath.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            return
+        }
+        outPath.mkdirs()
+        for (child in children) {
+            copyAssetTree(assets, "$assetPath/$child", File(outPath, child))
+        }
     }
 
 }
