@@ -3,8 +3,12 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
-def qnnNodeEncoderCaseDir = file("${rootDir}/../QnnNodeEncoderMlpBodyCase")
+def qnnNodeEncoderCaseDir = file("${rootDir}/../QnnNodeEncoderMlpBodyCaseHtpV68")
 def qnnBlock000NodeCaseDir = file("${rootDir}/../QnnBlock000NodeCase")
+def qnnBlock000EdgeMeshCaseDir = file("${rootDir}/../QnnBlock000EdgeMeshCase")
+def qnnBlock000EdgeMeshMlpBodyCaseDir = file("${rootDir}/../QnnBlock000EdgeMeshMlpBodyCase")
+def qnnBlock001EdgeMeshMlpBodyCaseDir = file("${rootDir}/../QnnBlock001EdgeMeshMlpBodyCase")
+def splitNodeEncoderDir = file("${projectDir}/src/main/assets/split_artifacts/node_encoder")
 def generatedQnnAssetRoot = file("$buildDir/generated/qnnNodeEncoderAssets")
 
 android {
@@ -69,6 +73,9 @@ android {
 tasks.register('syncQnnNodeEncoderCaseAssets', Copy) {
     from(qnnNodeEncoderCaseDir)
     into(new File(generatedQnnAssetRoot, 'qnn_node_encoder_case'))
+    from(splitNodeEncoderDir) {
+        include 'layernorm_gamma.bin', 'layernorm_beta.bin', 'manifest.json'
+    }
 }
 
 tasks.register('syncQnnBlock000NodeCaseAssets', Copy) {
@@ -76,9 +83,27 @@ tasks.register('syncQnnBlock000NodeCaseAssets', Copy) {
     into(new File(generatedQnnAssetRoot, 'qnn_block_0_0_node_case'))
 }
 
+tasks.register('syncQnnBlock000EdgeMeshCaseAssets', Copy) {
+    from(qnnBlock000EdgeMeshCaseDir)
+    into(new File(generatedQnnAssetRoot, 'qnn_block_0_0_edge_mesh_case'))
+}
+
+tasks.register('syncQnnBlock000EdgeMeshMlpBodyCaseAssets', Copy) {
+    from(qnnBlock000EdgeMeshMlpBodyCaseDir)
+    into(new File(generatedQnnAssetRoot, 'qnn_block_0_0_edge_mesh_mlp_body_case'))
+}
+
+tasks.register('syncQnnBlock001EdgeMeshMlpBodyCaseAssets', Copy) {
+    from(qnnBlock001EdgeMeshMlpBodyCaseDir)
+    into(new File(generatedQnnAssetRoot, 'qnn_block_0_1_edge_mesh_mlp_body_case'))
+}
+
 preBuild.dependsOn(
     tasks.named('syncQnnNodeEncoderCaseAssets'),
-    tasks.named('syncQnnBlock000NodeCaseAssets')
+    tasks.named('syncQnnBlock000NodeCaseAssets'),
+    tasks.named('syncQnnBlock000EdgeMeshCaseAssets'),
+    tasks.named('syncQnnBlock000EdgeMeshMlpBodyCaseAssets'),
+    tasks.named('syncQnnBlock001EdgeMeshMlpBodyCaseAssets')
 )
 
 dependencies {

@@ -16,7 +16,8 @@ object HoodPipelineRunner {
     private const val EDGE_MLP_CHUNK_EDGES = 4096
     private const val ENABLE_DUMMY_MODEL_SET = false
     private const val ENABLE_SINGLE_SEQUENCE_FRAME = true
-    private const val ENABLE_QNN_NODE_ENCODER = true
+    private const val ENABLE_QNN_NODE_ENCODER = false
+    private const val ENABLE_QNN_BLOCK_0_0_EDGE_MESH = true
     // Split flags mean: run the exported MLP body on NNAPI, then apply LayerNorm on CPU.
     private const val ENABLE_SPLIT_NODE_ENCODER = false
     private const val ENABLE_SPLIT_EDGE_ENCODER_MESH = false
@@ -36,7 +37,9 @@ object HoodPipelineRunner {
         val edgeCoarse1Enc: ProfiledSession,
         val edgeCoarse2Enc: ProfiledSession,
         val decoder: ProfiledSession,
-        val qnnNodeEncoderReady: Boolean = false,
+        val htpNodeEncoderReady: Boolean = false,
+        val qnnBlock000EdgeMeshReady: Boolean = false,
+        val qnnBlock001EdgeMeshReady: Boolean = false,
         val nodeEncSplitArtifacts: SplitPartitionArtifacts? = null,
         val nodeEncSplitModelFile: File? = null,
         val nodeEncSplitSession: ProfiledSession? = null,
@@ -120,21 +123,23 @@ object HoodPipelineRunner {
     fun run(
         assets: AssetManager,
         filesDir: File,
+        nativeLibraryDir: String,
         env: OrtEnvironment,
         profileDir: File
     ): String {
         return when {
             ENABLE_SINGLE_SEQUENCE_FRAME && assetExists(assets, "pipeline_real_sequence/config.json") ->
-                runSingleSequenceFrame(assets, filesDir, env, profileDir)
-            assetExists(assets, "pipeline_real_sequence/config.json") -> runSequence(assets, filesDir, env, profileDir)
-            assetExists(assets, "pipeline_real/config.json") -> runSingle(assets, filesDir, env, profileDir, "pipeline_real", logIntermediate = true)
-            else -> runSingle(assets, filesDir, env, profileDir, "pipeline", logIntermediate = true)
+                runSingleSequenceFrame(assets, filesDir, nativeLibraryDir, env, profileDir)
+            assetExists(assets, "pipeline_real_sequence/config.json") -> runSequence(assets, filesDir, nativeLibraryDir, env, profileDir)
+            assetExists(assets, "pipeline_real/config.json") -> runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, "pipeline_real", logIntermediate = true)
+            else -> runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, "pipeline", logIntermediate = true)
         }
     }
 
     private fun runSingleSequenceFrame(
         assets: AssetManager,
         filesDir: File,
+        nativeLibraryDir: String,
         env: OrtEnvironment,
         profileDir: File
     ): String {
@@ -142,20 +147,21 @@ object HoodPipelineRunner {
         val firstFrame = config.getJSONArray("frames").getJSONObject(0)
         val frameIdx = firstFrame.getInt("frame_idx")
         val assetBase = firstFrame.getString("asset_base")
-        val line = runSingle(assets, filesDir, env, profileDir, assetBase, logIntermediate = true)
+        val line = runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, assetBase, logIntermediate = true)
         return "sequence frame=$frameIdx $line"
     }
 
     private fun runSequence(
         assets: AssetManager,
         filesDir: File,
+        nativeLibraryDir: String,
         env: OrtEnvironment,
         profileDir: File
     ): String {
         val config = readJsonObject(assets, "pipeline_real_sequence/config.json")
         val frames = config.getJSONArray("frames")
         val modelBase = selectModelBase(assets)
-        val sessions = createSharedSessions(env, assets, filesDir, profileDir, modelBase)
+        val sessions = createSharedSessions(env, assets, filesDir, nativeLibraryDir, profileDir, modelBase)
         val lines = mutableListOf<String>()
         var maxDiffAll = 0f
         try {
@@ -187,13 +193,14 @@ object HoodPipelineRunner {
     private fun runSingle(
         assets: AssetManager,
         filesDir: File,
+        nativeLibraryDir: String,
         env: OrtEnvironment,
         profileDir: File,
         assetBase: String,
         logIntermediate: Boolean
     ): String {
         val modelBase = selectModelBase(assets)
-        val sessions = createSharedSessions(env, assets, filesDir, profileDir, modelBase)
+        val sessions = createSharedSessions(env, assets, filesDir, nativeLibraryDir, profileDir, modelBase)
         return try {
             runFrame(assets, filesDir, env, profileDir, assetBase, modelBase, sessions, logIntermediate).line
         } finally {
@@ -359,23 +366,21 @@ object HoodPipelineRunner {
             val rows = nCloth + nActiveObs
             val splitArtifacts = shared.nodeEncSplitArtifacts
             val splitSession = shared.nodeEncSplitSession
-            if (shared.qnnNodeEncoderReady && splitArtifacts != null) {
+            if (shared.htpNodeEncoderReady && splitArtifacts != null) {
                 try {
-                    val mlpBody = timer.measure("node_encoder_qnn_exec") {
-                        NativeQairtBridge.runCachedQnnNodeEncoderCaseInput(combinedNodeRaw)
+                    val daemonResult = timer.measure("node_encoder_htp_roundtrip") {
+                        NodeEncoderHtpDaemonClient.runNodeEncoderStage(combinedNodeRaw)
                     }
-                    timer.measure("node_encoder_qnn_layernorm") {
-                        NativeQairtBridge.applyLayerNorm(
-                            mlpBody,
-                            rows,
-                            splitArtifacts.outputDim,
-                            splitArtifacts.gamma,
-                            splitArtifacts.beta,
-                            splitArtifacts.eps
-                        )
-                    }
+                    timer.addMillis("node_encoder_htp_qnn_exec", daemonResult.qnnMs)
+                    timer.addMillis("node_encoder_htp_layernorm", daemonResult.layerNormMs)
+                    timer.addMillis("node_encoder_htp_total", daemonResult.daemonTotalMs)
+                    timer.addMillis(
+                        "node_encoder_htp_socket",
+                        maxOf(0.0, daemonResult.roundTripMs - daemonResult.daemonTotalMs)
+                    )
+                    daemonResult.output
                 } catch (t: Throwable) {
-                    Log.w("HoodOnnxTest", "QNN cached node encoder failed, falling back to ORT: ${t.message}")
+                    Log.w("HoodOnnxTest", "HTP node encoder daemon failed, falling back to ORT: ${t.message}")
                     runNodeEncoder(shared.nodeEnc.session, combinedNodeRaw, rows, nodeFeatureDim, nCloth + nObs)
                 }
             } else if (ENABLE_SPLIT_NODE_ENCODER && splitArtifacts != null && splitSession != null) {
@@ -413,7 +418,7 @@ object HoodPipelineRunner {
             )
             error("node_encoder output size mismatch")
         }
-        if (logIntermediate && (shared.qnnNodeEncoderReady || (ENABLE_SPLIT_NODE_ENCODER && shared.nodeEncSplitSession != null)) && expNodeEncCloth != null && expNodeEncObs != null) {
+        if (logIntermediate && (shared.htpNodeEncoderReady || (ENABLE_SPLIT_NODE_ENCODER && shared.nodeEncSplitSession != null)) && expNodeEncCloth != null && expNodeEncObs != null) {
             val expectedCombined = buildExpectedCombinedLatent(
                 nCloth = nCloth,
                 nObs = nObs,
@@ -422,19 +427,19 @@ object HoodPipelineRunner {
                 expectedCloth = expNodeEncCloth,
                 expectedObstacle = expNodeEncObs
             )
-            val label = if (shared.qnnNodeEncoderReady) "node_encoder_qnn_combined" else "node_encoder_split_combined"
+            val label = if (shared.htpNodeEncoderReady) "node_encoder_htp_combined" else "node_encoder_split_combined"
             Log.i("HoodOnnxTest", "$label max_abs_diff=${maxAbsDiff(combinedLatent, expectedCombined)}")
-            if (shared.qnnNodeEncoderReady && expNodeEncCombinedOutput != null) {
+            if (shared.htpNodeEncoderReady && expNodeEncCombinedOutput != null) {
                 Log.i(
                     "HoodOnnxTest",
-                    "node_encoder_pipeline_vs_qnn_case_expected max_abs_diff=${maxAbsDiff(expectedCombined, expNodeEncCombinedOutput)}"
+                    "node_encoder_pipeline_vs_htp_case_expected max_abs_diff=${maxAbsDiff(expectedCombined, expNodeEncCombinedOutput)}"
                 )
             }
         }
-        if (logIntermediate && shared.qnnNodeEncoderReady && expNodeEncCombinedOutput != null) {
+        if (logIntermediate && shared.htpNodeEncoderReady && expNodeEncCombinedOutput != null) {
             Log.i(
                 "HoodOnnxTest",
-                "node_encoder_qnn_case_expected max_abs_diff=${maxAbsDiff(combinedLatent, expNodeEncCombinedOutput)}"
+                "node_encoder_htp_case_expected max_abs_diff=${maxAbsDiff(combinedLatent, expNodeEncCombinedOutput)}"
             )
         }
         val clothLatent = combinedLatent.copyOfRange(0, nCloth * latent)
@@ -526,6 +531,7 @@ object HoodPipelineRunner {
 
         val steps = processSteps ?: buildDefaultProcessSteps(blocks)
         val downsampleStack = ArrayDeque<DownsampleStash>()
+        var qnnMeshStateDirty = false
 
         for (i in 0 until steps.length()) {
             val step = steps.getJSONObject(i)
@@ -560,6 +566,15 @@ object HoodPipelineRunner {
             val level = step.getInt("level")
             val block = step.getInt("block")
             val edgeKeys = step.getJSONArray("edge_keys")
+            val useQnnBlock000EdgeMesh =
+                level == 0 && block == 0 && shared.qnnBlock000EdgeMeshReady && shared.qnnBlock001EdgeMeshReady
+            val useQnnBlock001EdgeMesh =
+                level == 0 && block == 1 && shared.qnnBlock000EdgeMeshReady && shared.qnnBlock001EdgeMeshReady
+            val useQnnMeshSequence = useQnnBlock000EdgeMesh || useQnnBlock001EdgeMesh
+            if (qnnMeshStateDirty && !useQnnMeshSequence) {
+                meshEdges = NativeQairtBridge.exportCachedQnnMeshEdgeState()
+                qnnMeshStateDirty = false
+            }
 
             val blockSessions = timer.measure("session_create_blocks") {
                     getOrCreateBlockSessions(shared, env, assets, filesDir, profileDir, modelBase, level, block)
@@ -571,8 +586,7 @@ object HoodPipelineRunner {
             val worldInverseUpd = timer.measure("block_edge_mlp_world") {
                 runEdgeMlp(blockSessions.world.session, obsNodes, clothNodes, worldInverseEdges, edgeIndexWorldInverse, latent)
             }
-
-            val meshUpd = if (blockSessions.mesh != null) {
+            val meshUpd = if (blockSessions.mesh != null && !useQnnMeshSequence) {
                 timer.measure("block_edge_mlp_mesh") {
                     runEdgeMlp(blockSessions.mesh.session, clothNodes, clothNodes, meshEdges, edgeIndexMesh, latent)
                 }
@@ -596,7 +610,9 @@ object HoodPipelineRunner {
             if (level == 0 && block == 0) {
                 logIfExpected("block_0_0_updated_world_direct", worldDirectUpd, expBlock0UpdWorldDirect)
                 logIfExpected("block_0_0_updated_world_inverse", worldInverseUpd, expBlock0UpdWorldInverse)
-                if (meshUpd != null) logIfExpected("block_0_0_updated_mesh", meshUpd, expBlock0UpdMesh)
+                if (meshUpd != null) {
+                    logIfExpected("block_0_0_updated_mesh", meshUpd, expBlock0UpdMesh)
+                }
                 if (coarse0Upd != null) logIfExpected("block_0_0_updated_coarse0", coarse0Upd, expBlock0UpdCoarse0)
             }
 
@@ -619,15 +635,35 @@ object HoodPipelineRunner {
                 )
             }
 
-            val aggMesh = if (meshUpd != null) {
-                timer.measure("scatter_mesh") {
-                    CpuScatterSum.scatterSum(
-                        edgeIndexMesh.copyOfRange(0, edgeIndexMesh.size / 2),
-                        edgeIndexMesh.copyOfRange(edgeIndexMesh.size / 2, edgeIndexMesh.size),
-                        meshUpd,
-                        nCloth,
-                        latent
-                    )
+            val aggMesh = if (blockSessions.mesh != null) {
+                if (useQnnBlock000EdgeMesh) {
+                    timer.measure("block_edge_mlp_mesh") {
+                        timer.measure("block_0_0_edge_mesh_qnn_exec") {
+                            val prime = NativeQairtBridge.primeCachedQnnMeshEdgeState(meshEdges, latent)
+                            if (!prime.startsWith("primed")) {
+                                throw IllegalStateException("failed to prime qnn mesh state: $prime")
+                            }
+                            qnnMeshStateDirty = true
+                            NativeQairtBridge.runCachedQnnBlock000EdgeMeshMlpBodyCaseStateAgg(clothNodes, edgeIndexMesh, latent)
+                        }
+                    }
+                } else if (useQnnBlock001EdgeMesh) {
+                    timer.measure("block_edge_mlp_mesh") {
+                        timer.measure("block_0_1_edge_mesh_qnn_exec") {
+                            qnnMeshStateDirty = true
+                            NativeQairtBridge.runCachedQnnBlock001EdgeMeshMlpBodyCaseStateAgg(clothNodes, edgeIndexMesh, latent)
+                        }
+                    }
+                } else {
+                    timer.measure("scatter_mesh") {
+                        CpuScatterSum.scatterSum(
+                            edgeIndexMesh.copyOfRange(0, edgeIndexMesh.size / 2),
+                            edgeIndexMesh.copyOfRange(edgeIndexMesh.size / 2, edgeIndexMesh.size),
+                            meshUpd!!,
+                            nCloth,
+                            latent
+                        )
+                    }
                 }
             } else null
             val aggCoarse0 = if (coarse0Upd != null) {
@@ -666,7 +702,15 @@ object HoodPipelineRunner {
 
             if (level == 0 && block == 0) {
                 logIfExpected("block_0_0_agg_world_cloth", aggWorldCloth, expBlock0AggWorld)
-                if (aggMesh != null) logIfExpected("block_0_0_agg_mesh", aggMesh, expBlock0AggMesh)
+                if (aggMesh != null) {
+                    logIfExpected("block_0_0_agg_mesh", aggMesh, expBlock0AggMesh)
+                    if (useQnnBlock000EdgeMesh && expBlock0AggMesh != null) {
+                        Log.i(
+                            "HoodOnnxTest",
+                            "block_0_0_edge_mesh_qnn_agg_vs_expected max_abs_diff=${maxAbsDiff(aggMesh, expBlock0AggMesh)}"
+                        )
+                    }
+                }
                 if (aggCoarse0 != null) logIfExpected("block_0_0_agg_coarse0", aggCoarse0, expBlock0AggCoarse0)
             }
 
@@ -773,23 +817,52 @@ object HoodPipelineRunner {
         env: OrtEnvironment,
         assets: AssetManager,
         filesDir: File,
+        nativeLibraryDir: String,
         profileDir: File,
         modelBase: String
     ): SharedSessions {
-        var qnnNodeEncoderReady = false
+        var htpNodeEncoderReady = false
         if (ENABLE_QNN_NODE_ENCODER && assetDirExists(assets, "qnn_node_encoder_case")) {
             try {
                 val qnnBundleDir = File(filesDir, "qnn_node_encoder_case")
                 copyAssetTree(assets, "qnn_node_encoder_case", qnnBundleDir)
-                val initResult = NativeQairtBridge.initCachedQnnNodeEncoderCase(qnnBundleDir.absolutePath)
-                Log.i("HoodOnnxTest", "qnn/node_encoder_pipeline_init: $initResult")
-                qnnNodeEncoderReady =
+                val initResult = NodeEncoderHtpDaemonClient.init(filesDir, nativeLibraryDir, qnnBundleDir)
+                Log.i("HoodOnnxTest", "htp/node_encoder_pipeline_init: $initResult")
+                htpNodeEncoderReady = initResult.startsWith("connected")
+            } catch (t: Throwable) {
+                Log.w("HoodOnnxTest", "htp/node_encoder_pipeline_init failed: ${t.message}")
+            }
+        }
+        var qnnBlock000EdgeMeshReady = false
+        if (ENABLE_QNN_BLOCK_0_0_EDGE_MESH && assetDirExists(assets, "qnn_block_0_0_edge_mesh_mlp_body_case")) {
+            try {
+                val qnnBundleDir = File(filesDir, "qnn_block_0_0_edge_mesh_mlp_body_case")
+                copyAssetTree(assets, "qnn_block_0_0_edge_mesh_mlp_body_case", qnnBundleDir)
+                val initResult = NativeQairtBridge.initCachedQnnBlock000EdgeMeshMlpBodyCase(qnnBundleDir.absolutePath)
+                Log.i("HoodOnnxTest", "qnn/block_0_0_edge_mesh_pipeline_init: $initResult")
+                qnnBlock000EdgeMeshReady =
                     initResult.contains("backendCreate=0") &&
                     initResult.contains("graphFinalize=0") &&
                     initResult.contains("setupInput=OK") &&
                     initResult.contains("setupOutput=OK")
             } catch (t: Throwable) {
-                Log.w("HoodOnnxTest", "qnn/node_encoder_pipeline_init failed: ${t.message}")
+                Log.w("HoodOnnxTest", "qnn/block_0_0_edge_mesh_pipeline_init failed: ${t.message}")
+            }
+        }
+        var qnnBlock001EdgeMeshReady = false
+        if (ENABLE_QNN_BLOCK_0_0_EDGE_MESH && assetDirExists(assets, "qnn_block_0_1_edge_mesh_mlp_body_case")) {
+            try {
+                val qnnBundleDir = File(filesDir, "qnn_block_0_1_edge_mesh_mlp_body_case")
+                copyAssetTree(assets, "qnn_block_0_1_edge_mesh_mlp_body_case", qnnBundleDir)
+                val initResult = NativeQairtBridge.initCachedQnnBlock001EdgeMeshMlpBodyCase(qnnBundleDir.absolutePath)
+                Log.i("HoodOnnxTest", "qnn/block_0_1_edge_mesh_pipeline_init: $initResult")
+                qnnBlock001EdgeMeshReady =
+                    initResult.contains("backendCreate=0") &&
+                    initResult.contains("graphFinalize=0") &&
+                    initResult.contains("setupInput=OK") &&
+                    initResult.contains("setupOutput=OK")
+            } catch (t: Throwable) {
+                Log.w("HoodOnnxTest", "qnn/block_0_1_edge_mesh_pipeline_init failed: ${t.message}")
             }
         }
         val nodeEncoderSplit = if (ENABLE_SPLIT_NODE_ENCODER || ENABLE_QNN_NODE_ENCODER) {
@@ -852,7 +925,9 @@ object HoodPipelineRunner {
             edgeCoarse1Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse1.onnx", "real/edge_encoder_coarse1"),
             edgeCoarse2Enc = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/edge_encoder_coarse2.onnx", "real/edge_encoder_coarse2"),
             decoder = createProfiledSession(env, assets, filesDir, profileDir, "$modelBase/node_decoder.onnx", "real/node_decoder"),
-            qnnNodeEncoderReady = qnnNodeEncoderReady,
+            htpNodeEncoderReady = htpNodeEncoderReady,
+            qnnBlock000EdgeMeshReady = qnnBlock000EdgeMeshReady,
+            qnnBlock001EdgeMeshReady = qnnBlock001EdgeMeshReady,
             nodeEncSplitArtifacts = nodeEncoderSplit?.first,
             nodeEncSplitModelFile = nodeEncoderSplit?.second,
             nodeEncSplitSession = if (ENABLE_SPLIT_NODE_ENCODER && nodeEncoderSplit != null) {
@@ -895,11 +970,31 @@ object HoodPipelineRunner {
     }
 
     private fun closeSharedSessions(shared: SharedSessions) {
-        if (shared.qnnNodeEncoderReady) {
+        if (shared.htpNodeEncoderReady) {
             try {
-                Log.i("HoodOnnxTest", "qnn/node_encoder_pipeline_release: ${NativeQairtBridge.releaseCachedQnnNodeEncoderCase()}")
+                Log.i("HoodOnnxTest", "htp/node_encoder_pipeline_release: ${NodeEncoderHtpDaemonClient.close()}")
             } catch (t: Throwable) {
-                Log.w("HoodOnnxTest", "qnn/node_encoder_pipeline_release failed: ${t.message}")
+                Log.w("HoodOnnxTest", "htp/node_encoder_pipeline_release failed: ${t.message}")
+            }
+        }
+        if (shared.qnnBlock000EdgeMeshReady) {
+            try {
+                Log.i(
+                    "HoodOnnxTest",
+                    "qnn/block_0_0_edge_mesh_pipeline_release: ${NativeQairtBridge.releaseCachedQnnBlock000EdgeMeshMlpBodyCase()}"
+                )
+            } catch (t: Throwable) {
+                Log.w("HoodOnnxTest", "qnn/block_0_0_edge_mesh_pipeline_release failed: ${t.message}")
+            }
+        }
+        if (shared.qnnBlock001EdgeMeshReady) {
+            try {
+                Log.i(
+                    "HoodOnnxTest",
+                    "qnn/block_0_1_edge_mesh_pipeline_release: ${NativeQairtBridge.releaseCachedQnnBlock001EdgeMeshMlpBodyCase()}"
+                )
+            } catch (t: Throwable) {
+                Log.w("HoodOnnxTest", "qnn/block_0_1_edge_mesh_pipeline_release failed: ${t.message}")
             }
         }
         for (block in shared.blockSessions.values) {
@@ -1751,21 +1846,15 @@ object HoodPipelineRunner {
         var edgeStart = 0
         while (edgeStart < eCount) {
             val chunkEdges = minOf(EDGE_MLP_CHUNK_EDGES, eCount - edgeStart)
-            val input = FloatArray(chunkEdges * latent * 3)
-            var localEdge = 0
-            while (localEdge < chunkEdges) {
-                val edge = edgeStart + localEdge
-                val src = edgeIndex[edge]
-                val tgt = edgeIndex[edge + eCount]
-                val inBase = localEdge * latent * 3
-                val tgtBase = tgt * latent
-                val srcBase = src * latent
-                val edgeBase = edge * latent
-                System.arraycopy(tgtNodes, tgtBase, input, inBase, latent)
-                System.arraycopy(srcNodes, srcBase, input, inBase + latent, latent)
-                System.arraycopy(edgeFeat, edgeBase, input, inBase + latent * 2, latent)
-                localEdge++
-            }
+            val input = buildEdgeMlpInputChunk(
+                tgtNodes = tgtNodes,
+                srcNodes = srcNodes,
+                edgeFeat = edgeFeat,
+                edgeIndex = edgeIndex,
+                latent = latent,
+                edgeStart = edgeStart,
+                chunkEdges = chunkEdges
+            )
             val cols = latent * 3
             val chunkOut = if (ENABLE_DUMMY_MODEL_SET) {
                 runOnnxPadded(session, input, chunkEdges, cols, EDGE_MLP_CHUNK_EDGES)
@@ -1776,6 +1865,34 @@ object HoodPipelineRunner {
             edgeStart += chunkEdges
         }
         return output
+    }
+
+    private fun buildEdgeMlpInputChunk(
+        tgtNodes: FloatArray,
+        srcNodes: FloatArray,
+        edgeFeat: FloatArray,
+        edgeIndex: IntArray,
+        latent: Int,
+        edgeStart: Int,
+        chunkEdges: Int
+    ): FloatArray {
+        val eCount = edgeIndex.size / 2
+        val input = FloatArray(chunkEdges * latent * 3)
+        var localEdge = 0
+        while (localEdge < chunkEdges) {
+            val edge = edgeStart + localEdge
+            val src = edgeIndex[edge]
+            val tgt = edgeIndex[edge + eCount]
+            val inBase = localEdge * latent * 3
+            val tgtBase = tgt * latent
+            val srcBase = src * latent
+            val edgeBase = edge * latent
+            System.arraycopy(tgtNodes, tgtBase, input, inBase, latent)
+            System.arraycopy(srcNodes, srcBase, input, inBase + latent, latent)
+            System.arraycopy(edgeFeat, edgeBase, input, inBase + latent * 2, latent)
+            localEdge++
+        }
+        return input
     }
 
     private fun concatNodeInputs(

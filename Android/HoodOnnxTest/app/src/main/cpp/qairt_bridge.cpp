@@ -17,6 +17,7 @@
 #include "QnnInterface.h"
 #include "QnnModel.hpp"
 #include "System/QnnSystemInterface.h"
+#include "qnn_case_runtime.h"
 
 namespace {
 
@@ -42,11 +43,18 @@ struct QnnCasePaths {
   std::filesystem::path libcxx;
   std::filesystem::path system;
   std::filesystem::path gpuExt;
+  std::filesystem::path htpPrepare;
+  std::filesystem::path htpStub;
+  std::filesystem::path htpSkel;
   std::filesystem::path backend;
   std::filesystem::path model;
   std::filesystem::path input;
   std::filesystem::path expected;
   std::filesystem::path probeOutput;
+  std::filesystem::path layernormGamma;
+  std::filesystem::path layernormBeta;
+  std::filesystem::path manifest;
+  std::string backendKind;
 };
 
 struct CachedQnnCaseState {
@@ -57,6 +65,8 @@ struct CachedQnnCaseState {
   void* libcxxHandle = nullptr;
   void* systemHandle = nullptr;
   void* gpuExtHandle = nullptr;
+  void* htpPrepareHandle = nullptr;
+  void* htpStubHandle = nullptr;
   void* backendLibHandle = nullptr;
   void* modelLibHandle = nullptr;
   const QnnInterface_t* provider = nullptr;
@@ -70,9 +80,19 @@ struct CachedQnnCaseState {
   std::vector<uint8_t> expectedBytes;
   std::vector<uint8_t> inputBuffer;
   std::vector<uint8_t> outputBuffer;
+  std::vector<float> layernormGamma;
+  std::vector<float> layernormBeta;
+  float layernormEps = 1.0e-5f;
+  int layernormRows = 0;
+  int layernormCols = 0;
 };
 
 CachedQnnCaseState g_cachedNodeEncoderCase;
+CachedQnnCaseState g_cachedBlock000EdgeMeshCase;
+CachedQnnCaseState g_cachedBlock001EdgeMeshCase;
+std::vector<float> g_cachedMeshEdgeState;
+int g_cachedMeshEdgeStateLatent = 0;
+int g_cachedMeshEdgeStateEdgeCount = 0;
 
 const QnnInterface_t* SelectQnnInterface(const QnnInterface_t** providers, uint32_t count);
 const QnnSystemInterface_t* SelectQnnSystemInterface(const QnnSystemInterface_t** providers,
@@ -144,16 +164,37 @@ std::filesystem::path FindProbeModelLib(const std::filesystem::path& dir) {
 
 QnnCasePaths DiscoverCasePaths(const std::string& bundleDir) {
   const std::filesystem::path bundle(bundleDir);
+  const auto htpBackend = bundle / "libQnnHtp.so";
+  const bool useHtp = FileExists(htpBackend);
   return {
       bundle,
       bundle / "libc++_shared.so",
       bundle / "libQnnSystem.so",
       bundle / "libQnnGpuNetRunExtensions.so",
-      bundle / "libQnnGpu.so",
+      bundle / "libQnnHtpPrepare.so",
+      FindFirstMatchingFile(bundle,
+                            {"libQnnHtpV81Stub.so",
+                             "libQnnHtpV79Stub.so",
+                             "libQnnHtpV75Stub.so",
+                             "libQnnHtpV73Stub.so",
+                             "libQnnHtpV69Stub.so",
+                             "libQnnHtpV68Stub.so"}),
+      FindFirstMatchingFile(bundle,
+                            {"libQnnHtpV81Skel.so",
+                             "libQnnHtpV79Skel.so",
+                             "libQnnHtpV75Skel.so",
+                             "libQnnHtpV73Skel.so",
+                             "libQnnHtpV69Skel.so",
+                             "libQnnHtpV68Skel.so"}),
+      useHtp ? htpBackend : (bundle / "libQnnGpu.so"),
       FindProbeModelLib(bundle),
       FindFirstMatchingFile(bundle, {"node_encoder_input.raw", "input.raw"}),
       FindFirstMatchingFile(bundle, {"expected_node_encoder_output.raw", "node_encoder_probe_expected.raw", "expected_output.raw"}),
       FindFirstMatchingFile(bundle, {"output_probe/output/Result_0/output.raw", "hybrid_output.raw"}),
+      FindFirstMatchingFile(bundle, {"layernorm_gamma.bin"}),
+      FindFirstMatchingFile(bundle, {"layernorm_beta.bin"}),
+      FindFirstMatchingFile(bundle, {"manifest.json", "case_manifest.json"}),
+      useHtp ? "htp" : "gpu",
   };
 }
 
@@ -168,6 +209,14 @@ std::vector<uint8_t> ReadBinaryFile(const std::filesystem::path& path) {
     input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
   }
   return bytes;
+}
+
+std::vector<float> ReadFloatFile(const std::filesystem::path& path) {
+  const auto bytes = ReadBinaryFile(path);
+  if (bytes.empty() || (bytes.size() % sizeof(float)) != 0) return {};
+  std::vector<float> values(bytes.size() / sizeof(float));
+  std::memcpy(values.data(), bytes.data(), bytes.size());
+  return values;
 }
 
 size_t DataTypeByteSize(Qnn_DataType_t dataType) {
@@ -299,18 +348,106 @@ void ReleaseCachedCase(CachedQnnCaseState& state) {
   }
   DlCloseQuiet(state.modelLibHandle);
   DlCloseQuiet(state.backendLibHandle);
+  DlCloseQuiet(state.htpStubHandle);
+  DlCloseQuiet(state.htpPrepareHandle);
   DlCloseQuiet(state.gpuExtHandle);
   DlCloseQuiet(state.systemHandle);
   DlCloseQuiet(state.libcxxHandle);
   state = CachedQnnCaseState{};
 }
 
-std::string InitializeCachedNodeEncoderCase(const std::string& bundleDir, CachedQnnCaseState& state) {
+void ResetCachedMeshEdgeState() {
+  g_cachedMeshEdgeState.clear();
+  g_cachedMeshEdgeStateLatent = 0;
+  g_cachedMeshEdgeStateEdgeCount = 0;
+}
+
+bool ValidateMeshEdgeState(const CachedQnnCaseState& state, int latent, int edgeCount) {
+  return state.initialized &&
+      latent > 0 &&
+      edgeCount > 0 &&
+      !g_cachedMeshEdgeState.empty() &&
+      g_cachedMeshEdgeStateLatent == latent &&
+      g_cachedMeshEdgeStateEdgeCount == edgeCount &&
+      static_cast<size_t>(edgeCount) * static_cast<size_t>(latent) == g_cachedMeshEdgeState.size() &&
+      state.inputBuffer.size() == static_cast<size_t>(edgeCount) * static_cast<size_t>(latent) * 3 * sizeof(float) &&
+      state.outputBuffer.size() == static_cast<size_t>(edgeCount) * static_cast<size_t>(latent) * sizeof(float);
+}
+
+bool ExecuteMeshEdgeCaseToAggregated(
+    const CachedQnnCaseState& state,
+    const std::vector<float>& clothNodes,
+    const std::vector<jint>& edgeIndex,
+    int latent,
+    std::vector<float>& aggregated) {
+  const int edgeCount = static_cast<int>(edgeIndex.size() / 2);
+  const int targetNodeCount = static_cast<int>(clothNodes.size() / latent);
+  if (!ValidateMeshEdgeState(state, latent, edgeCount)) return false;
+
+  auto* packed = reinterpret_cast<float*>(const_cast<std::vector<uint8_t>&>(state.inputBuffer).data());
+  for (int edge = 0; edge < edgeCount; ++edge) {
+    const int src = edgeIndex[edge];
+    const int tgt = edgeIndex[edge + edgeCount];
+    const int rowBase = edge * latent * 3;
+    const int tgtBase = tgt * latent;
+    const int srcBase = src * latent;
+    const int edgeBase = edge * latent;
+    std::memcpy(packed + rowBase, clothNodes.data() + tgtBase, static_cast<size_t>(latent) * sizeof(float));
+    std::memcpy(packed + rowBase + latent, clothNodes.data() + srcBase, static_cast<size_t>(latent) * sizeof(float));
+    std::memcpy(packed + rowBase + latent * 2, g_cachedMeshEdgeState.data() + edgeBase, static_cast<size_t>(latent) * sizeof(float));
+  }
+
+  const auto executeStatus = state.provider->QNN_INTERFACE_VER_NAME.graphExecute(
+      state.graphHandle,
+      const_cast<Qnn_Tensor_t*>(&state.inputTensor),
+      1,
+      const_cast<Qnn_Tensor_t*>(&state.outputTensor),
+      1,
+      nullptr,
+      nullptr);
+  if (executeStatus != QNN_SUCCESS) return false;
+
+  std::vector<float> post(static_cast<size_t>(edgeCount * latent));
+  const float* qnnOutput = reinterpret_cast<const float*>(state.outputBuffer.data());
+  if (!state.layernormGamma.empty() && !state.layernormBeta.empty()) {
+    hood::qnn::ApplyLayerNormRows(
+        qnnOutput,
+        edgeCount,
+        latent,
+        state.layernormGamma.data(),
+        state.layernormBeta.data(),
+        state.layernormEps,
+        post.data());
+  } else {
+    std::memcpy(post.data(), qnnOutput, static_cast<size_t>(edgeCount * latent) * sizeof(float));
+  }
+
+  for (size_t i = 0; i < g_cachedMeshEdgeState.size(); ++i) {
+    g_cachedMeshEdgeState[i] += post[i];
+  }
+
+  aggregated.assign(static_cast<size_t>(targetNodeCount * latent), 0.0f);
+  for (int edge = 0; edge < edgeCount; ++edge) {
+    const int tgt = edgeIndex[edge + edgeCount];
+    const int inBase = edge * latent;
+    const int outBase = tgt * latent;
+    for (int f = 0; f < latent; ++f) {
+      aggregated[outBase + f] += post[inBase + f];
+    }
+  }
+  return true;
+}
+
+std::string InitializeCachedCase(const std::string& bundleDir, CachedQnnCaseState& state) {
   ReleaseCachedCase(state);
   const auto paths = DiscoverCasePaths(bundleDir);
   std::ostringstream oss;
   oss << "bundle=" << bundleDir;
-  if (!FileExists(paths.libcxx) || !FileExists(paths.system) || !FileExists(paths.gpuExt) ||
+  const bool needsGpuExt = paths.backendKind == "gpu";
+  const bool needsHtp = paths.backendKind == "htp";
+  if (!FileExists(paths.libcxx) || !FileExists(paths.system) ||
+      (needsGpuExt && !FileExists(paths.gpuExt)) ||
+      (needsHtp && (!FileExists(paths.htpPrepare) || paths.htpStub.empty())) ||
       !FileExists(paths.backend) || paths.model.empty() || paths.input.empty() || paths.expected.empty()) {
     oss << " | missing_required_files";
     return oss.str();
@@ -333,11 +470,30 @@ std::string InitializeCachedNodeEncoderCase(const std::string& bundleDir, Cached
     ReleaseCachedCase(state);
     return oss.str();
   }
-  state.gpuExtHandle = dlopen(paths.gpuExt.c_str(), RTLD_NOW | RTLD_GLOBAL);
-  if (state.gpuExtHandle == nullptr) {
-    oss << " | gpu_ext_dlopen_fail=" << DlErrorString();
-    ReleaseCachedCase(state);
-    return oss.str();
+  if (needsGpuExt) {
+    state.gpuExtHandle = dlopen(paths.gpuExt.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (state.gpuExtHandle == nullptr) {
+      oss << " | gpu_ext_dlopen_fail=" << DlErrorString();
+      ReleaseCachedCase(state);
+      return oss.str();
+    }
+  }
+  if (needsHtp) {
+    const std::string adspPath = bundleDir +
+        ";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp";
+    setenv("ADSP_LIBRARY_PATH", adspPath.c_str(), 1);
+    state.htpPrepareHandle = dlopen(paths.htpPrepare.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (state.htpPrepareHandle == nullptr) {
+      oss << " | htp_prepare_dlopen_fail=" << DlErrorString();
+      ReleaseCachedCase(state);
+      return oss.str();
+    }
+    state.htpStubHandle = dlopen(paths.htpStub.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (state.htpStubHandle == nullptr) {
+      oss << " | htp_stub_dlopen_fail=" << DlErrorString();
+      ReleaseCachedCase(state);
+      return oss.str();
+    }
   }
   state.backendLibHandle = dlopen(paths.backend.c_str(), RTLD_NOW | RTLD_GLOBAL);
   if (state.backendLibHandle == nullptr) {
@@ -455,6 +611,48 @@ std::string InitializeCachedNodeEncoderCase(const std::string& bundleDir, Cached
     return oss.str();
   }
 
+  if (!paths.layernormGamma.empty() && !paths.layernormBeta.empty() && !paths.manifest.empty()) {
+    state.layernormGamma = ReadFloatFile(paths.layernormGamma);
+    state.layernormBeta = ReadFloatFile(paths.layernormBeta);
+    std::ifstream manifest(paths.manifest);
+    if (manifest && !state.layernormGamma.empty() &&
+        state.layernormGamma.size() == state.layernormBeta.size()) {
+      std::stringstream buffer;
+      buffer << manifest.rdbuf();
+      const std::string text = buffer.str();
+      auto findNumber = [&](const char* key, double fallback) -> double {
+        const std::string needle = std::string("\"") + key + "\"";
+        const auto pos = text.find(needle);
+        if (pos == std::string::npos) return fallback;
+        const auto colon = text.find(':', pos + needle.size());
+        if (colon == std::string::npos) return fallback;
+        const auto start = text.find_first_of("-0123456789", colon + 1);
+        if (start == std::string::npos) return fallback;
+        char* endPtr = nullptr;
+        const double value = std::strtod(text.c_str() + start, &endPtr);
+        return endPtr == text.c_str() + start ? fallback : value;
+      };
+      state.layernormRows = static_cast<int>(findNumber("rows", 0.0));
+      state.layernormCols = static_cast<int>(
+          findNumber("layernorm_dim", static_cast<double>(state.layernormGamma.size())));
+      state.layernormEps = static_cast<float>(findNumber("layernorm_eps", 1.0e-5));
+    }
+  }
+  if (!state.layernormGamma.empty() &&
+      state.layernormGamma.size() == state.layernormBeta.size() &&
+      state.layernormCols > 0) {
+    oss << " | layernorm=OK gamma=" << state.layernormGamma.size()
+        << " cols=" << state.layernormCols
+        << " eps=" << state.layernormEps;
+  } else if (!paths.layernormGamma.empty() || !paths.layernormBeta.empty() || !paths.manifest.empty()) {
+    oss << " | layernorm=BAD gamma=" << state.layernormGamma.size()
+        << " beta=" << state.layernormBeta.size()
+        << " cols=" << state.layernormCols
+        << " eps=" << state.layernormEps;
+  } else {
+    oss << " | layernorm=MISSING";
+  }
+
   if (state.provider->QNN_INTERFACE_VER_NAME.backendGetBuildId != nullptr) {
     const char* buildId = nullptr;
     if (state.provider->QNN_INTERFACE_VER_NAME.backendGetBuildId(&buildId) == QNN_SUCCESS && buildId != nullptr) {
@@ -555,30 +753,14 @@ Java_com_magcode_hoodonnxtest_NativeQairtBridge_applyLayerNorm(
   }
 
   std::vector<jfloat> outputData(static_cast<size_t>(inputSize));
-  for (int r = 0; r < rows; ++r) {
-    const int rowOffset = r * cols;
-    double mean = 0.0;
-    for (int c = 0; c < cols; ++c) {
-      mean += inputData[rowOffset + c];
-    }
-    mean /= static_cast<double>(cols);
-
-    double variance = 0.0;
-    for (int c = 0; c < cols; ++c) {
-      const double centered = static_cast<double>(inputData[rowOffset + c]) - mean;
-      variance += centered * centered;
-    }
-    variance /= static_cast<double>(cols);
-
-    const double invStd = 1.0 / std::sqrt(variance + static_cast<double>(eps));
-    for (int c = 0; c < cols; ++c) {
-      const double normalized =
-          (static_cast<double>(inputData[rowOffset + c]) - mean) * invStd;
-      outputData[static_cast<size_t>(rowOffset + c)] =
-          static_cast<jfloat>(normalized * static_cast<double>(gammaData[c]) +
-                              static_cast<double>(betaData[c]));
-    }
-  }
+  hood::qnn::ApplyLayerNormRows(
+      inputData,
+      rows,
+      cols,
+      gammaData,
+      betaData,
+      eps,
+      outputData.data());
 
   env->SetFloatArrayRegion(output, 0, inputSize, outputData.data());
   env->ReleaseFloatArrayElements(input, const_cast<jfloat*>(inputData), JNI_ABORT);
@@ -665,17 +847,29 @@ Java_com_magcode_hoodonnxtest_NativeQairtBridge_probeQnnCase(
 
   std::ostringstream oss;
   oss << "bundle=" << bundleDir;
+  oss << " | backendKind=" << paths.backendKind;
 
   oss << " | libc++_shared.so=" << (FileExists(paths.libcxx) ? "OK" : "MISSING");
   oss << " | libQnnSystem.so=" << (FileExists(paths.system) ? "OK" : "MISSING");
-  oss << " | libQnnGpuNetRunExtensions.so=" << (FileExists(paths.gpuExt) ? "OK" : "MISSING");
-  oss << " | libQnnGpu.so=" << (FileExists(paths.backend) ? "OK" : "MISSING");
+  if (paths.backendKind == "gpu") {
+    oss << " | libQnnGpuNetRunExtensions.so=" << (FileExists(paths.gpuExt) ? "OK" : "MISSING");
+    oss << " | libQnnGpu.so=" << (FileExists(paths.backend) ? "OK" : "MISSING");
+  } else {
+    oss << " | libQnnHtpPrepare.so=" << (FileExists(paths.htpPrepare) ? "OK" : "MISSING");
+    oss << " | htpStub=" << (!paths.htpStub.empty() ? paths.htpStub.filename().string() : "<missing>");
+    oss << " | htpSkel=" << (!paths.htpSkel.empty() ? paths.htpSkel.filename().string() : "<missing>");
+    oss << " | libQnnHtp.so=" << (FileExists(paths.backend) ? "OK" : "MISSING");
+  }
   oss << " | model=" << (!paths.model.empty() ? paths.model.filename().string() : "<missing>");
   oss << " | input=" << (!paths.input.empty() ? paths.input.filename().string() : "<missing>");
   oss << " | expected=" << (!paths.expected.empty() ? paths.expected.filename().string() : "<missing>");
   oss << " | probeOutput="
       << (!paths.probeOutput.empty() ? paths.probeOutput.filename().string() : "<missing>");
-  if (!FileExists(paths.libcxx) || !FileExists(paths.system) || !FileExists(paths.gpuExt) ||
+  const bool needsGpuExt = paths.backendKind == "gpu";
+  const bool needsHtp = paths.backendKind == "htp";
+  if (!FileExists(paths.libcxx) || !FileExists(paths.system) ||
+      (needsGpuExt && !FileExists(paths.gpuExt)) ||
+      (needsHtp && (!FileExists(paths.htpPrepare) || paths.htpStub.empty())) ||
       !FileExists(paths.backend) || paths.model.empty() || paths.input.empty() || paths.expected.empty()) {
     return env->NewStringUTF(oss.str().c_str());
   }
@@ -695,12 +889,32 @@ Java_com_magcode_hoodonnxtest_NativeQairtBridge_probeQnnCase(
   }
   oss << " | system=loaded";
 
-  void* extHandle = dlopen(paths.gpuExt.c_str(), RTLD_NOW | RTLD_GLOBAL);
-  if (extHandle == nullptr) {
-    oss << " | gpu_ext_dlopen_fail=" << DlErrorString();
-    return env->NewStringUTF(oss.str().c_str());
+  void* extHandle = nullptr;
+  void* htpPrepareHandle = nullptr;
+  void* htpStubHandle = nullptr;
+  if (needsGpuExt) {
+    extHandle = dlopen(paths.gpuExt.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (extHandle == nullptr) {
+      oss << " | gpu_ext_dlopen_fail=" << DlErrorString();
+      return env->NewStringUTF(oss.str().c_str());
+    }
+    oss << " | gpu_ext=loaded";
+  } else {
+    const std::string adspPath =
+        bundleDir + ";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp";
+    setenv("ADSP_LIBRARY_PATH", adspPath.c_str(), 1);
+    htpPrepareHandle = dlopen(paths.htpPrepare.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (htpPrepareHandle == nullptr) {
+      oss << " | htp_prepare_dlopen_fail=" << DlErrorString();
+      return env->NewStringUTF(oss.str().c_str());
+    }
+    htpStubHandle = dlopen(paths.htpStub.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (htpStubHandle == nullptr) {
+      oss << " | htp_stub_dlopen_fail=" << DlErrorString();
+      return env->NewStringUTF(oss.str().c_str());
+    }
+    oss << " | htp_prepare=loaded | htp_stub=loaded";
   }
-  oss << " | gpu_ext=loaded";
 
   void* backendHandleLib = dlopen(paths.backend.c_str(), RTLD_NOW | RTLD_GLOBAL);
   if (backendHandleLib == nullptr) {
@@ -996,7 +1210,37 @@ Java_com_magcode_hoodonnxtest_NativeQairtBridge_initCachedQnnNodeEncoderCase(
   }
   const std::string bundleDir(bundleDirChars);
   env->ReleaseStringUTFChars(bundleDirJ, bundleDirChars);
-  const auto result = InitializeCachedNodeEncoderCase(bundleDir, g_cachedNodeEncoderCase);
+  const auto result = InitializeCachedCase(bundleDir, g_cachedNodeEncoderCase);
+  return env->NewStringUTF(result.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_initCachedQnnBlock000EdgeMeshMlpBodyCase(
+    JNIEnv* env,
+    jclass,
+    jstring bundleDirJ) {
+  const char* bundleDirChars = env->GetStringUTFChars(bundleDirJ, nullptr);
+  if (bundleDirChars == nullptr) {
+    return env->NewStringUTF("failed_to_read_bundle_dir");
+  }
+  const std::string bundleDir(bundleDirChars);
+  env->ReleaseStringUTFChars(bundleDirJ, bundleDirChars);
+  const auto result = InitializeCachedCase(bundleDir, g_cachedBlock000EdgeMeshCase);
+  return env->NewStringUTF(result.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_initCachedQnnBlock001EdgeMeshMlpBodyCase(
+    JNIEnv* env,
+    jclass,
+    jstring bundleDirJ) {
+  const char* bundleDirChars = env->GetStringUTFChars(bundleDirJ, nullptr);
+  if (bundleDirChars == nullptr) {
+    return env->NewStringUTF("failed_to_read_bundle_dir");
+  }
+  const std::string bundleDir(bundleDirChars);
+  env->ReleaseStringUTFChars(bundleDirJ, bundleDirChars);
+  const auto result = InitializeCachedCase(bundleDir, g_cachedBlock001EdgeMeshCase);
   return env->NewStringUTF(result.c_str());
 }
 
@@ -1130,12 +1374,427 @@ Java_com_magcode_hoodonnxtest_NativeQairtBridge_runCachedQnnNodeEncoderCaseInput
   return outputJ;
 }
 
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_runCachedQnnBlock000EdgeMeshMlpBodyCaseInput(
+    JNIEnv* env,
+    jclass,
+    jfloatArray inputJ) {
+  if (!g_cachedBlock000EdgeMeshCase.initialized) {
+    jclass exClass = env->FindClass("java/lang/IllegalStateException");
+    env->ThrowNew(exClass, "cached qnn block_0_0 edge mesh case is not initialized");
+    return nullptr;
+  }
+  if (inputJ == nullptr) {
+    jclass exClass = env->FindClass("java/lang/IllegalArgumentException");
+    env->ThrowNew(exClass, "input is null");
+    return nullptr;
+  }
+  const jsize inputSize = env->GetArrayLength(inputJ);
+  const size_t expectedFloats = g_cachedBlock000EdgeMeshCase.inputBuffer.size() / sizeof(float);
+  if (static_cast<size_t>(inputSize) != expectedFloats) {
+    std::ostringstream oss;
+    oss << "input size mismatch expected=" << expectedFloats << " actual=" << inputSize;
+    jclass exClass = env->FindClass("java/lang/IllegalArgumentException");
+    env->ThrowNew(exClass, oss.str().c_str());
+    return nullptr;
+  }
+
+  env->GetFloatArrayRegion(
+      inputJ, 0, inputSize, reinterpret_cast<jfloat*>(g_cachedBlock000EdgeMeshCase.inputBuffer.data()));
+  if (env->ExceptionCheck()) {
+    return nullptr;
+  }
+
+  const auto executeStatus = g_cachedBlock000EdgeMeshCase.provider->QNN_INTERFACE_VER_NAME.graphExecute(
+      g_cachedBlock000EdgeMeshCase.graphHandle,
+      &g_cachedBlock000EdgeMeshCase.inputTensor,
+      1,
+      &g_cachedBlock000EdgeMeshCase.outputTensor,
+      1,
+      nullptr,
+      nullptr);
+  if (executeStatus != QNN_SUCCESS) {
+    std::ostringstream oss;
+    oss << "graphExecute failed: " << executeStatus;
+    jclass exClass = env->FindClass("java/lang/RuntimeException");
+    env->ThrowNew(exClass, oss.str().c_str());
+    return nullptr;
+  }
+
+  const jsize outputFloats = static_cast<jsize>(g_cachedBlock000EdgeMeshCase.outputBuffer.size() / sizeof(float));
+  jfloatArray outputJ = env->NewFloatArray(outputFloats);
+  if (outputJ == nullptr) return nullptr;
+  env->SetFloatArrayRegion(
+      outputJ, 0, outputFloats, reinterpret_cast<const jfloat*>(g_cachedBlock000EdgeMeshCase.outputBuffer.data()));
+  return outputJ;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_runCachedQnnBlock000EdgeMeshMlpBodyCasePacked(
+    JNIEnv* env,
+    jclass,
+    jfloatArray tgtNodesJ,
+    jfloatArray srcNodesJ,
+    jfloatArray edgeFeatJ,
+    jintArray edgeIndexJ,
+    jint latent) {
+  if (!g_cachedBlock000EdgeMeshCase.initialized) {
+    jclass exClass = env->FindClass("java/lang/IllegalStateException");
+    env->ThrowNew(exClass, "cached qnn block_0_0 edge mesh case is not initialized");
+    return nullptr;
+  }
+  if (tgtNodesJ == nullptr || srcNodesJ == nullptr || edgeFeatJ == nullptr || edgeIndexJ == nullptr) {
+    jclass exClass = env->FindClass("java/lang/IllegalArgumentException");
+    env->ThrowNew(exClass, "null input");
+    return nullptr;
+  }
+  if (latent <= 0) {
+    jclass exClass = env->FindClass("java/lang/IllegalArgumentException");
+    env->ThrowNew(exClass, "latent must be > 0");
+    return nullptr;
+  }
+
+  const jsize tgtSize = env->GetArrayLength(tgtNodesJ);
+  const jsize srcSize = env->GetArrayLength(srcNodesJ);
+  const jsize edgeFeatSize = env->GetArrayLength(edgeFeatJ);
+  const jsize edgeIndexSize = env->GetArrayLength(edgeIndexJ);
+  const int edgeCount = edgeIndexSize / 2;
+  const size_t expectedInputFloats = static_cast<size_t>(g_cachedBlock000EdgeMeshCase.inputBuffer.size() / sizeof(float));
+  const size_t expectedOutputFloats = static_cast<size_t>(g_cachedBlock000EdgeMeshCase.outputBuffer.size() / sizeof(float));
+  if ((edgeIndexSize % 2) != 0 ||
+      static_cast<size_t>(edgeCount) * static_cast<size_t>(latent) * 3 != expectedInputFloats ||
+      static_cast<size_t>(edgeCount) * static_cast<size_t>(latent) != expectedOutputFloats ||
+      (tgtSize % latent) != 0 || (srcSize % latent) != 0 || edgeFeatSize != edgeCount * latent) {
+    std::ostringstream oss;
+    oss << "shape mismatch edgeCount=" << edgeCount
+        << " latent=" << latent
+        << " expectedInputFloats=" << expectedInputFloats
+        << " expectedOutputFloats=" << expectedOutputFloats
+        << " tgtSize=" << tgtSize
+        << " srcSize=" << srcSize
+        << " edgeFeatSize=" << edgeFeatSize
+        << " edgeIndexSize=" << edgeIndexSize;
+    jclass exClass = env->FindClass("java/lang/IllegalArgumentException");
+    env->ThrowNew(exClass, oss.str().c_str());
+    return nullptr;
+  }
+
+  std::vector<float> tgtNodes(static_cast<size_t>(tgtSize));
+  std::vector<float> srcNodes(static_cast<size_t>(srcSize));
+  std::vector<float> edgeFeat(static_cast<size_t>(edgeFeatSize));
+  std::vector<jint> edgeIndex(static_cast<size_t>(edgeIndexSize));
+  env->GetFloatArrayRegion(tgtNodesJ, 0, tgtSize, tgtNodes.data());
+  env->GetFloatArrayRegion(srcNodesJ, 0, srcSize, srcNodes.data());
+  env->GetFloatArrayRegion(edgeFeatJ, 0, edgeFeatSize, edgeFeat.data());
+  env->GetIntArrayRegion(edgeIndexJ, 0, edgeIndexSize, edgeIndex.data());
+  if (env->ExceptionCheck()) {
+    return nullptr;
+  }
+
+  auto* packed = reinterpret_cast<float*>(g_cachedBlock000EdgeMeshCase.inputBuffer.data());
+  for (int edge = 0; edge < edgeCount; ++edge) {
+    const int src = edgeIndex[edge];
+    const int tgt = edgeIndex[edge + edgeCount];
+    const int rowBase = edge * latent * 3;
+    const int tgtBase = tgt * latent;
+    const int srcBase = src * latent;
+    const int edgeBase = edge * latent;
+    std::memcpy(packed + rowBase, tgtNodes.data() + tgtBase, static_cast<size_t>(latent) * sizeof(float));
+    std::memcpy(packed + rowBase + latent, srcNodes.data() + srcBase, static_cast<size_t>(latent) * sizeof(float));
+    std::memcpy(packed + rowBase + latent * 2, edgeFeat.data() + edgeBase, static_cast<size_t>(latent) * sizeof(float));
+  }
+
+  const auto executeStatus = g_cachedBlock000EdgeMeshCase.provider->QNN_INTERFACE_VER_NAME.graphExecute(
+      g_cachedBlock000EdgeMeshCase.graphHandle,
+      &g_cachedBlock000EdgeMeshCase.inputTensor,
+      1,
+      &g_cachedBlock000EdgeMeshCase.outputTensor,
+      1,
+      nullptr,
+      nullptr);
+  if (executeStatus != QNN_SUCCESS) {
+    std::ostringstream oss;
+    oss << "graphExecute failed: " << executeStatus;
+    jclass exClass = env->FindClass("java/lang/RuntimeException");
+    env->ThrowNew(exClass, oss.str().c_str());
+    return nullptr;
+  }
+
+  const jsize outputFloats = static_cast<jsize>(expectedOutputFloats);
+  jfloatArray outputJ = env->NewFloatArray(outputFloats);
+  if (outputJ == nullptr) return nullptr;
+
+  if (!g_cachedBlock000EdgeMeshCase.layernormGamma.empty() &&
+      !g_cachedBlock000EdgeMeshCase.layernormBeta.empty()) {
+    std::vector<float> post(static_cast<size_t>(outputFloats));
+    hood::qnn::ApplyLayerNormRows(
+        reinterpret_cast<const float*>(g_cachedBlock000EdgeMeshCase.outputBuffer.data()),
+        edgeCount,
+        latent,
+        g_cachedBlock000EdgeMeshCase.layernormGamma.data(),
+        g_cachedBlock000EdgeMeshCase.layernormBeta.data(),
+        g_cachedBlock000EdgeMeshCase.layernormEps,
+        post.data());
+    env->SetFloatArrayRegion(outputJ, 0, outputFloats, post.data());
+  } else {
+    env->SetFloatArrayRegion(
+        outputJ, 0, outputFloats, reinterpret_cast<const jfloat*>(g_cachedBlock000EdgeMeshCase.outputBuffer.data()));
+  }
+  return outputJ;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_runCachedQnnBlock000EdgeMeshMlpBodyCasePackedAgg(
+    JNIEnv* env,
+    jclass,
+    jfloatArray tgtNodesJ,
+    jfloatArray srcNodesJ,
+    jfloatArray edgeFeatJ,
+    jintArray edgeIndexJ,
+    jint latent) {
+  if (!g_cachedBlock000EdgeMeshCase.initialized) {
+    jclass exClass = env->FindClass("java/lang/IllegalStateException");
+    env->ThrowNew(exClass, "block_0_0_edge_mesh case not initialized");
+    return nullptr;
+  }
+
+  const jsize tgtFloats = env->GetArrayLength(tgtNodesJ);
+  const jsize srcFloats = env->GetArrayLength(srcNodesJ);
+  const jsize edgeFloats = env->GetArrayLength(edgeFeatJ);
+  const jsize edgeIndexCount = env->GetArrayLength(edgeIndexJ);
+  if (latent <= 0 || tgtFloats % latent != 0 || srcFloats % latent != 0 || edgeFloats % latent != 0 ||
+      edgeIndexCount % 2 != 0) {
+    jclass exClass = env->FindClass("java/lang/IllegalArgumentException");
+    env->ThrowNew(exClass, "invalid packed edge mesh dimensions");
+    return nullptr;
+  }
+
+  const int edgeCount = edgeIndexCount / 2;
+  const int targetNodeCount = tgtFloats / latent;
+  const int expectedInputFloats = edgeCount * latent * 3;
+  const int expectedOutputFloats = edgeCount * latent;
+  if (edgeFloats != edgeCount * latent ||
+      expectedInputFloats * static_cast<int>(sizeof(float)) != static_cast<int>(g_cachedBlock000EdgeMeshCase.inputBuffer.size()) ||
+      expectedOutputFloats * static_cast<int>(sizeof(float)) != static_cast<int>(g_cachedBlock000EdgeMeshCase.outputBuffer.size())) {
+    jclass exClass = env->FindClass("java/lang/IllegalArgumentException");
+    env->ThrowNew(exClass, "cached tensor shape mismatch");
+    return nullptr;
+  }
+
+  std::vector<float> tgtNodes(static_cast<size_t>(tgtFloats));
+  std::vector<float> srcNodes(static_cast<size_t>(srcFloats));
+  std::vector<float> edgeFeat(static_cast<size_t>(edgeFloats));
+  std::vector<jint> edgeIndex(static_cast<size_t>(edgeIndexCount));
+  env->GetFloatArrayRegion(tgtNodesJ, 0, tgtFloats, tgtNodes.data());
+  env->GetFloatArrayRegion(srcNodesJ, 0, srcFloats, srcNodes.data());
+  env->GetFloatArrayRegion(edgeFeatJ, 0, edgeFloats, edgeFeat.data());
+  env->GetIntArrayRegion(edgeIndexJ, 0, edgeIndexCount, edgeIndex.data());
+
+  auto* packed = reinterpret_cast<float*>(g_cachedBlock000EdgeMeshCase.inputBuffer.data());
+  for (int edge = 0; edge < edgeCount; ++edge) {
+    const int src = edgeIndex[edge];
+    const int tgt = edgeIndex[edge + edgeCount];
+    const int rowBase = edge * latent * 3;
+    const int tgtBase = tgt * latent;
+    const int srcBase = src * latent;
+    const int edgeBase = edge * latent;
+    std::memcpy(packed + rowBase, tgtNodes.data() + tgtBase, static_cast<size_t>(latent) * sizeof(float));
+    std::memcpy(packed + rowBase + latent, srcNodes.data() + srcBase, static_cast<size_t>(latent) * sizeof(float));
+    std::memcpy(packed + rowBase + latent * 2, edgeFeat.data() + edgeBase, static_cast<size_t>(latent) * sizeof(float));
+  }
+
+  const auto executeStatus = g_cachedBlock000EdgeMeshCase.provider->QNN_INTERFACE_VER_NAME.graphExecute(
+      g_cachedBlock000EdgeMeshCase.graphHandle,
+      &g_cachedBlock000EdgeMeshCase.inputTensor,
+      1,
+      &g_cachedBlock000EdgeMeshCase.outputTensor,
+      1,
+      nullptr,
+      nullptr);
+  if (executeStatus != QNN_SUCCESS) {
+    std::ostringstream oss;
+    oss << "graphExecute failed: " << executeStatus;
+    jclass exClass = env->FindClass("java/lang/RuntimeException");
+    env->ThrowNew(exClass, oss.str().c_str());
+    return nullptr;
+  }
+
+  std::vector<float> post(static_cast<size_t>(expectedOutputFloats));
+  const float* qnnOutput = reinterpret_cast<const float*>(g_cachedBlock000EdgeMeshCase.outputBuffer.data());
+  if (!g_cachedBlock000EdgeMeshCase.layernormGamma.empty() &&
+      !g_cachedBlock000EdgeMeshCase.layernormBeta.empty()) {
+    hood::qnn::ApplyLayerNormRows(
+        qnnOutput,
+        edgeCount,
+        latent,
+        g_cachedBlock000EdgeMeshCase.layernormGamma.data(),
+        g_cachedBlock000EdgeMeshCase.layernormBeta.data(),
+        g_cachedBlock000EdgeMeshCase.layernormEps,
+        post.data());
+  } else {
+    std::memcpy(post.data(), qnnOutput, static_cast<size_t>(expectedOutputFloats) * sizeof(float));
+  }
+
+  std::vector<float> aggregated(static_cast<size_t>(targetNodeCount * latent), 0.0f);
+  for (int edge = 0; edge < edgeCount; ++edge) {
+    const int tgt = edgeIndex[edge + edgeCount];
+    const int inBase = edge * latent;
+    const int outBase = tgt * latent;
+    for (int f = 0; f < latent; ++f) {
+      aggregated[outBase + f] += post[inBase + f];
+    }
+  }
+
+  const jsize outputFloats = static_cast<jsize>(aggregated.size());
+  jfloatArray outputJ = env->NewFloatArray(outputFloats);
+  if (outputJ == nullptr) return nullptr;
+  env->SetFloatArrayRegion(outputJ, 0, outputFloats, aggregated.data());
+  return outputJ;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_primeCachedQnnMeshEdgeState(
+    JNIEnv* env,
+    jclass,
+    jfloatArray edgeFeatJ,
+    jint latent) {
+  if (edgeFeatJ == nullptr || latent <= 0) {
+    return env->NewStringUTF("invalid_args");
+  }
+  const jsize edgeFeatSize = env->GetArrayLength(edgeFeatJ);
+  if ((edgeFeatSize % latent) != 0) {
+    return env->NewStringUTF("shape_mismatch");
+  }
+  const int edgeCount = edgeFeatSize / latent;
+  g_cachedMeshEdgeState.assign(static_cast<size_t>(edgeFeatSize), 0.0f);
+  env->GetFloatArrayRegion(edgeFeatJ, 0, edgeFeatSize, g_cachedMeshEdgeState.data());
+  if (env->ExceptionCheck()) {
+    ResetCachedMeshEdgeState();
+    return nullptr;
+  }
+  g_cachedMeshEdgeStateLatent = latent;
+  g_cachedMeshEdgeStateEdgeCount = edgeCount;
+  std::ostringstream oss;
+  oss << "primed edges=" << edgeCount << " latent=" << latent;
+  return env->NewStringUTF(oss.str().c_str());
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_runCachedQnnBlock000EdgeMeshMlpBodyCaseStateAgg(
+    JNIEnv* env,
+    jclass,
+    jfloatArray clothNodesJ,
+    jintArray edgeIndexJ,
+    jint latent) {
+  if (!g_cachedBlock000EdgeMeshCase.initialized) {
+    jclass exClass = env->FindClass("java/lang/IllegalStateException");
+    env->ThrowNew(exClass, "cached qnn block_0_0 edge mesh case is not initialized");
+    return nullptr;
+  }
+  const jsize clothSize = env->GetArrayLength(clothNodesJ);
+  const jsize edgeIndexSize = env->GetArrayLength(edgeIndexJ);
+  if (clothNodesJ == nullptr || edgeIndexJ == nullptr || latent <= 0 || (clothSize % latent) != 0 ||
+      (edgeIndexSize % 2) != 0) {
+    jclass exClass = env->FindClass("java/lang/IllegalArgumentException");
+    env->ThrowNew(exClass, "invalid block_0_0 mesh state args");
+    return nullptr;
+  }
+  std::vector<float> clothNodes(static_cast<size_t>(clothSize));
+  std::vector<jint> edgeIndex(static_cast<size_t>(edgeIndexSize));
+  env->GetFloatArrayRegion(clothNodesJ, 0, clothSize, clothNodes.data());
+  env->GetIntArrayRegion(edgeIndexJ, 0, edgeIndexSize, edgeIndex.data());
+  if (env->ExceptionCheck()) return nullptr;
+
+  std::vector<float> aggregated;
+  if (!ExecuteMeshEdgeCaseToAggregated(g_cachedBlock000EdgeMeshCase, clothNodes, edgeIndex, latent, aggregated)) {
+    jclass exClass = env->FindClass("java/lang/RuntimeException");
+    env->ThrowNew(exClass, "block_0_0 mesh QNN execution failed");
+    return nullptr;
+  }
+  jfloatArray outputJ = env->NewFloatArray(static_cast<jsize>(aggregated.size()));
+  if (outputJ == nullptr) return nullptr;
+  env->SetFloatArrayRegion(outputJ, 0, static_cast<jsize>(aggregated.size()), aggregated.data());
+  return outputJ;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_runCachedQnnBlock001EdgeMeshMlpBodyCaseStateAgg(
+    JNIEnv* env,
+    jclass,
+    jfloatArray clothNodesJ,
+    jintArray edgeIndexJ,
+    jint latent) {
+  if (!g_cachedBlock001EdgeMeshCase.initialized) {
+    jclass exClass = env->FindClass("java/lang/IllegalStateException");
+    env->ThrowNew(exClass, "cached qnn block_0_1 edge mesh case is not initialized");
+    return nullptr;
+  }
+  const jsize clothSize = env->GetArrayLength(clothNodesJ);
+  const jsize edgeIndexSize = env->GetArrayLength(edgeIndexJ);
+  if (clothNodesJ == nullptr || edgeIndexJ == nullptr || latent <= 0 || (clothSize % latent) != 0 ||
+      (edgeIndexSize % 2) != 0) {
+    jclass exClass = env->FindClass("java/lang/IllegalArgumentException");
+    env->ThrowNew(exClass, "invalid block_0_1 mesh state args");
+    return nullptr;
+  }
+  std::vector<float> clothNodes(static_cast<size_t>(clothSize));
+  std::vector<jint> edgeIndex(static_cast<size_t>(edgeIndexSize));
+  env->GetFloatArrayRegion(clothNodesJ, 0, clothSize, clothNodes.data());
+  env->GetIntArrayRegion(edgeIndexJ, 0, edgeIndexSize, edgeIndex.data());
+  if (env->ExceptionCheck()) return nullptr;
+
+  std::vector<float> aggregated;
+  if (!ExecuteMeshEdgeCaseToAggregated(g_cachedBlock001EdgeMeshCase, clothNodes, edgeIndex, latent, aggregated)) {
+    jclass exClass = env->FindClass("java/lang/RuntimeException");
+    env->ThrowNew(exClass, "block_0_1 mesh QNN execution failed");
+    return nullptr;
+  }
+  jfloatArray outputJ = env->NewFloatArray(static_cast<jsize>(aggregated.size()));
+  if (outputJ == nullptr) return nullptr;
+  env->SetFloatArrayRegion(outputJ, 0, static_cast<jsize>(aggregated.size()), aggregated.data());
+  return outputJ;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_exportCachedQnnMeshEdgeState(
+    JNIEnv* env,
+    jclass) {
+  jfloatArray outputJ = env->NewFloatArray(static_cast<jsize>(g_cachedMeshEdgeState.size()));
+  if (outputJ == nullptr) return nullptr;
+  if (!g_cachedMeshEdgeState.empty()) {
+    env->SetFloatArrayRegion(outputJ, 0, static_cast<jsize>(g_cachedMeshEdgeState.size()), g_cachedMeshEdgeState.data());
+  }
+  return outputJ;
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_magcode_hoodonnxtest_NativeQairtBridge_releaseCachedQnnNodeEncoderCase(
     JNIEnv* env,
     jclass) {
   const bool wasInitialized = g_cachedNodeEncoderCase.initialized;
   ReleaseCachedCase(g_cachedNodeEncoderCase);
+  const std::string result = wasInitialized ? "released" : "already_released";
+  return env->NewStringUTF(result.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_releaseCachedQnnBlock000EdgeMeshMlpBodyCase(
+    JNIEnv* env,
+    jclass) {
+  const bool wasInitialized = g_cachedBlock000EdgeMeshCase.initialized;
+  ReleaseCachedCase(g_cachedBlock000EdgeMeshCase);
+  ResetCachedMeshEdgeState();
+  const std::string result = wasInitialized ? "released" : "already_released";
+  return env->NewStringUTF(result.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_releaseCachedQnnBlock001EdgeMeshMlpBodyCase(
+    JNIEnv* env,
+    jclass) {
+  const bool wasInitialized = g_cachedBlock001EdgeMeshCase.initialized;
+  ReleaseCachedCase(g_cachedBlock001EdgeMeshCase);
+  ResetCachedMeshEdgeState();
   const std::string result = wasInitialized ? "released" : "already_released";
   return env->NewStringUTF(result.c_str());
 }

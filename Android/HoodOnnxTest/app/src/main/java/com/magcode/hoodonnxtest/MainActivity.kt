@@ -26,6 +26,7 @@ import java.nio.channels.FileChannel
 class MainActivity : Activity() {
     private companion object {
         private const val RUN_STARTUP_PROBES = false
+        private const val RUN_TARGETED_QNN_PROBES = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -236,10 +237,18 @@ class MainActivity : Activity() {
             }
         }
 
+        if (RUN_TARGETED_QNN_PROBES) {
+            runQnnCaseProbe("block_0_0_edge_mesh_mlp_body_case", "qnn_block_0_0_edge_mesh_mlp_body_case")?.let {
+                reportLines.add(it)
+                Log.i("HoodOnnxTest", it)
+            }
+        }
+
         val pipelineProfileDir = getExternalFilesDir(null) ?: filesDir
         val pipelineLine = HoodPipelineRunner.run(
             assets,
             filesDir,
+            applicationInfo.nativeLibraryDir,
             env,
             pipelineProfileDir
         )

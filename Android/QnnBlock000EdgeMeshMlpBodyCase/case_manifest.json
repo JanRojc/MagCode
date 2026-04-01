@@ -1,0 +1,18 @@
+{
+  "case_name": "qnn_block_0_0_edge_mesh_mlp_body_case",
+  "model_name": "block_0_0_edge_mesh_mlp_body",
+  "input_name": "input",
+  "output_name": "output",
+  "rows": 45768,
+  "input_dim": 384,
+  "output_dim": 128,
+  "source_model": "/Users/jan.rojc/Documents/MagCode/Android/QnnBlock000EdgeMeshMlpBodyCase/block_0_0_edge_mesh_mlp_body.onnx",
+  "source_input": "/Users/jan.rojc/Documents/MagCode/Android/QnnBlock000EdgeMeshCase/input.raw",
+  "source_expected_output": "/Users/jan.rojc/Documents/MagCode/Android/QnnBlock000EdgeMeshMlpBodyCase/expected_output.raw",
+  "device_input_path": "/data/local/tmp/qnn_block_0_0_edge_mesh_mlp_body_case/input.raw",
+  "device_dir": "/data/local/tmp/qnn_block_0_0_edge_mesh_mlp_body_case",
+  "backend": "gpu",
+  "postprocess": "cpu_layernorm",
+  "layernorm_dim": 128,
+  "layernorm_eps": 9.999999747378752e-06
+}

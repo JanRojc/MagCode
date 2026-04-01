@@ -29,4 +29,44 @@ object NativeQairtBridge {
     external fun runCachedQnnNodeEncoderCaseInput(input: FloatArray): FloatArray
 
     external fun releaseCachedQnnNodeEncoderCase(): String
+
+    external fun initCachedQnnBlock000EdgeMeshMlpBodyCase(bundleDir: String): String
+    external fun initCachedQnnBlock001EdgeMeshMlpBodyCase(bundleDir: String): String
+
+    external fun runCachedQnnBlock000EdgeMeshMlpBodyCaseInput(input: FloatArray): FloatArray
+
+    external fun runCachedQnnBlock000EdgeMeshMlpBodyCasePacked(
+        tgtNodes: FloatArray,
+        srcNodes: FloatArray,
+        edgeFeat: FloatArray,
+        edgeIndex: IntArray,
+        latent: Int
+    ): FloatArray
+
+    external fun runCachedQnnBlock000EdgeMeshMlpBodyCasePackedAgg(
+        tgtNodes: FloatArray,
+        srcNodes: FloatArray,
+        edgeFeat: FloatArray,
+        edgeIndex: IntArray,
+        latent: Int
+    ): FloatArray
+
+    external fun primeCachedQnnMeshEdgeState(edgeFeat: FloatArray, latent: Int): String
+
+    external fun runCachedQnnBlock000EdgeMeshMlpBodyCaseStateAgg(
+        clothNodes: FloatArray,
+        edgeIndex: IntArray,
+        latent: Int
+    ): FloatArray
+
+    external fun runCachedQnnBlock001EdgeMeshMlpBodyCaseStateAgg(
+        clothNodes: FloatArray,
+        edgeIndex: IntArray,
+        latent: Int
+    ): FloatArray
+
+    external fun exportCachedQnnMeshEdgeState(): FloatArray
+
+    external fun releaseCachedQnnBlock000EdgeMeshMlpBodyCase(): String
+    external fun releaseCachedQnnBlock001EdgeMeshMlpBodyCase(): String
 }
