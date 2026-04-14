@@ -1,0 +1,17 @@
+---
+timestamp: 383610119651
+command: ./qnn-net-run --backend libQnnGpu.so --model libblock_0_0_edge_mesh_mlp_body_quant.so --input_list input_list.txt --output_dir output_probe
+execution_mode: synchronous
+inferences_completed: 1
+graphs:
+  - graph_name: block_0_0_edge_mesh_mlp_body_quant
+    input_tensors:
+    - tensor_name: input
+      id: 1
+      datatype: QNN_DATATYPE_FLOAT_32
+      dimensions: [45768,384]
+    output_tensors:
+    - tensor_name: output
+      id: 15
+      datatype: QNN_DATATYPE_FLOAT_32
+      dimensions: [45768,128]

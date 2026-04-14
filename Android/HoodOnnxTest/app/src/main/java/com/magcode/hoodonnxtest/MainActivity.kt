@@ -25,8 +25,9 @@ import java.nio.channels.FileChannel
 
 class MainActivity : Activity() {
     private companion object {
-        private const val RUN_STARTUP_PROBES = false
+        private const val RUN_STARTUP_PROBES = true
         private const val RUN_TARGETED_QNN_PROBES = false
+        private const val RUN_ONLY_MLP_BODY_COMPARISON = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -66,163 +67,10 @@ class MainActivity : Activity() {
         Log.i("HoodOnnxTest", nnapiDevicesLine)
 
         if (RUN_STARTUP_PROBES) {
-            runCachedQnnNodeEncoderCase(reportLines, "qnn_node_encoder_case")
-            runQnnCaseProbe("node_encoder_case", "qnn_node_encoder_case")?.let {
+            runBlockBodyProbe(env, "cpu")?.let {
                 reportLines.add(it)
                 Log.i("HoodOnnxTest", it)
             }
-            runQnnCaseProbe("block_0_0_node_case", "qnn_block_0_0_node_case")?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-
-            runLiteRtGpuProbe(
-                label = "sample",
-                assetName = "litert_probe/mix_precision_sample.tflite"
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "dummy_linear",
-                assetName = "litert_probe/dummy_linear.tflite"
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "dummy_mlp3",
-                assetName = "litert_probe/dummy_mlp3.tflite",
-                useGpuDelegate = true
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "dummy_mlp3_cpu",
-                assetName = "litert_probe/dummy_mlp3.tflite",
-                useGpuDelegate = false
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "dummy_mlp3_large",
-                assetName = "litert_probe/dummy_mlp3_large.tflite",
-                useGpuDelegate = true
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "dummy_mlp3_large_cpu",
-                assetName = "litert_probe/dummy_mlp3_large.tflite",
-                useGpuDelegate = false
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "dummy_mlp3_xlarge",
-                assetName = "litert_probe/dummy_mlp3_xlarge.tflite",
-                useGpuDelegate = true,
-                warmupRuns = 3,
-                measuredRuns = 10
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "dummy_mlp3_xlarge_cpu",
-                assetName = "litert_probe/dummy_mlp3_xlarge.tflite",
-                useGpuDelegate = false,
-                warmupRuns = 3,
-                measuredRuns = 10
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "node_encoder_mlp",
-                assetName = "litert_probe/node_encoder_mlp.tflite",
-                useGpuDelegate = true,
-                expectedAssetName = "split_artifacts/node_encoder/mlp_body_expected.raw",
-                inputAssetName = "split_artifacts/node_encoder/node_encoder_input.raw"
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "node_encoder_mlp_cpu",
-                assetName = "litert_probe/node_encoder_mlp.tflite",
-                useGpuDelegate = false,
-                expectedAssetName = "split_artifacts/node_encoder/mlp_body_expected.raw",
-                inputAssetName = "split_artifacts/node_encoder/node_encoder_input.raw"
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "node_encoder_mlp_fp16",
-                assetName = "litert_probe/node_encoder_mlp_fp16.tflite",
-                useGpuDelegate = true,
-                expectedAssetName = "split_artifacts/node_encoder/mlp_body_expected.raw",
-                inputAssetName = "split_artifacts/node_encoder/node_encoder_input.raw"
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "node_encoder_mlp_fp16_cpu",
-                assetName = "litert_probe/node_encoder_mlp_fp16.tflite",
-                useGpuDelegate = false,
-                expectedAssetName = "split_artifacts/node_encoder/mlp_body_expected.raw",
-                inputAssetName = "split_artifacts/node_encoder/node_encoder_input.raw"
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "block_0_0_node_mlp",
-                assetName = "litert_probe/block_0_0_node_mlp.tflite",
-                useGpuDelegate = true,
-                expectedAssetName = "split_artifacts/block_0_0_node/mlp_body_expected.raw",
-                inputAssetName = "split_artifacts/block_0_0_node/input.raw"
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "block_0_0_node_mlp_cpu",
-                assetName = "litert_probe/block_0_0_node_mlp.tflite",
-                useGpuDelegate = false,
-                expectedAssetName = "split_artifacts/block_0_0_node/mlp_body_expected.raw",
-                inputAssetName = "split_artifacts/block_0_0_node/input.raw"
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "block_0_0_node_mlp_fp16",
-                assetName = "litert_probe/block_0_0_node_mlp_fp16.tflite",
-                useGpuDelegate = true,
-                expectedAssetName = "split_artifacts/block_0_0_node/mlp_body_expected.raw",
-                inputAssetName = "split_artifacts/block_0_0_node/input.raw"
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runLiteRtGpuProbe(
-                label = "block_0_0_node_mlp_fp16_cpu",
-                assetName = "litert_probe/block_0_0_node_mlp_fp16.tflite",
-                useGpuDelegate = false,
-                expectedAssetName = "split_artifacts/block_0_0_node/mlp_body_expected.raw",
-                inputAssetName = "split_artifacts/block_0_0_node/input.raw"
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-
             runBlockBodyProbe(env, "nnapi")?.let {
                 reportLines.add(it)
                 Log.i("HoodOnnxTest", it)
@@ -231,14 +79,41 @@ class MainActivity : Activity() {
                 reportLines.add(it)
                 Log.i("HoodOnnxTest", it)
             }
-            runBlockBodyProbe(env, "cpu")?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
+            val reportText = reportLines.joinToString(separator = "\n")
+            copyToClipboard(reportText)
+            return reportText
         }
 
         if (RUN_TARGETED_QNN_PROBES) {
+            runQnnCaseProbe("block_0_0_edge_mesh_case", "qnn_block_0_0_edge_mesh_case")?.let {
+                reportLines.add(it)
+                Log.i("HoodOnnxTest", it)
+            }
+            runMlpBodyCpuProbe(env)?.let {
+                reportLines.add(it)
+                Log.i("HoodOnnxTest", it)
+            }
             runQnnCaseProbe("block_0_0_edge_mesh_mlp_body_case", "qnn_block_0_0_edge_mesh_mlp_body_case")?.let {
+                reportLines.add(it)
+                Log.i("HoodOnnxTest", it)
+            }
+            runQnnCaseProbe(
+                "block_0_0_edge_mesh_mlp_body_quant_case_gpu",
+                "qnn_block_0_0_edge_mesh_mlp_body_quant_case_gpu"
+            )?.let {
+                reportLines.add(it)
+                Log.i("HoodOnnxTest", it)
+            }
+            if (RUN_ONLY_MLP_BODY_COMPARISON) {
+                val reportText = reportLines.joinToString(separator = "\n")
+                copyToClipboard(reportText)
+                return reportText
+            }
+            runFullBlockCpuProbe(env)?.let {
+                reportLines.add(it)
+                Log.i("HoodOnnxTest", it)
+            }
+            runQnnCaseProbe("block_0_0_edge_mesh_full_case", "qnn_block_0_0_edge_mesh_full_case")?.let {
                 reportLines.add(it)
                 Log.i("HoodOnnxTest", it)
             }
@@ -359,6 +234,7 @@ class MainActivity : Activity() {
     private fun runQnnCaseProbe(label: String, assetDir: String): String? {
         if (!assetDirExists(assetDir)) return null
         val qnnBundleDir = File(filesDir, assetDir)
+        qnnBundleDir.deleteRecursively()
         copyAssetTree(assetDir, qnnBundleDir)
         return "qnn/$label" + "_probe: ${NativeQairtBridge.probeQnnCase(qnnBundleDir.absolutePath)}"
     }
@@ -411,20 +287,135 @@ class MainActivity : Activity() {
         val input = readFloatBinary("$assetBase/input.raw")
         val expected = readFloatBinary("$assetBase/mlp_body_expected.raw")
 
-        val startNs = System.nanoTime()
+        val createStartNs = System.nanoTime()
         val session = env.createSession(modelFile.absolutePath, opts)
+        val sessionCreateMs = (System.nanoTime() - createStartNs) / 1_000_000.0
         val inputName = session.inputNames.first()
         val inputTensor = OnnxTensor.createTensor(env, toFloatBuffer(input), longArrayOf(rows, inputDim))
-        val result = session.run(mapOf(inputName to inputTensor))
-        val output = flatten2dFloatArray(result[0].value as Array<*>)
-        result.close()
+        val feed = mapOf(inputName to inputTensor)
+
+        repeat(3) {
+            val warm = session.run(feed)
+            warm.close()
+        }
+
+        val runTimesMs = ArrayList<Double>(20)
+        var output = FloatArray(0)
+        repeat(20) {
+            val startNs = System.nanoTime()
+            val result = session.run(feed)
+            runTimesMs.add((System.nanoTime() - startNs) / 1_000_000.0)
+            output = flatten2dFloatArray(result[0].value as Array<*>)
+            result.close()
+        }
         inputTensor.close()
         val profilePath = session.endProfiling()
         session.close()
-        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000.0
+        val avgMs = runTimesMs.average()
+        val medianMs = runTimesMs.sorted()[runTimesMs.size / 2]
 
         return "split_probe/block_0_0_node_mlp_${provider}: " +
-            "time=${"%.2f".format(elapsedMs)}ms " +
+            "sessionCreate=${"%.2f".format(sessionCreateMs)}ms " +
+            "avg=${"%.2f".format(avgMs)}ms " +
+            "median=${"%.2f".format(medianMs)}ms runs=20 warmup=3 " +
+            "compare={${compareFloatArrays(expected, output)}} " +
+            summarizeProfile(profilePath)
+    }
+
+    private fun runMlpBodyCpuProbe(env: OrtEnvironment): String? {
+        val assetBase = "qnn_block_0_0_edge_mesh_mlp_body_case"
+        if (!assetDirExists(assetBase)) return null
+
+        val opts = OrtSession.SessionOptions()
+        opts.setSessionLogLevel(OrtLoggingLevel.ORT_LOGGING_LEVEL_WARNING)
+        val profileFile = File(filesDir, "ort_profile_probe_block_0_0_edge_mesh_mlp_body_cpu.json")
+        opts.enableProfiling(profileFile.absolutePath)
+
+        val modelFile = copyAssetToFile("$assetBase/block_0_0_edge_mesh_mlp_body.onnx")
+        val input = readFloatBinary("$assetBase/input.raw")
+        val expected = readFloatBinary("$assetBase/expected_output.raw")
+        val shape = readLongShape("$assetBase/input_shape.json")
+
+        val createStartNs = System.nanoTime()
+        val session = env.createSession(modelFile.absolutePath, opts)
+        val sessionCreateMs = (System.nanoTime() - createStartNs) / 1_000_000.0
+        val inputName = session.inputNames.first()
+        val inputTensor = OnnxTensor.createTensor(env, toFloatBuffer(input), shape)
+        val feed = mapOf(inputName to inputTensor)
+
+        repeat(3) {
+            val warm = session.run(feed)
+            warm.close()
+        }
+
+        val runTimesMs = ArrayList<Double>(20)
+        var output = FloatArray(0)
+        repeat(20) {
+            val startNs = System.nanoTime()
+            val result = session.run(feed)
+            runTimesMs.add((System.nanoTime() - startNs) / 1_000_000.0)
+            output = flatten2dFloatArray(result[0].value as Array<*>)
+            result.close()
+        }
+        inputTensor.close()
+        val profilePath = session.endProfiling()
+        session.close()
+        val avgMs = runTimesMs.average()
+        val medianMs = runTimesMs.sorted()[runTimesMs.size / 2]
+
+        return "full_probe/block_0_0_edge_mesh_mlp_body_cpu: " +
+            "sessionCreate=${"%.2f".format(sessionCreateMs)}ms " +
+            "avg=${"%.2f".format(avgMs)}ms " +
+            "median=${"%.2f".format(medianMs)}ms runs=20 warmup=3 " +
+            "compare={${compareFloatArrays(expected, output)}} " +
+            summarizeProfile(profilePath)
+    }
+
+    private fun runFullBlockCpuProbe(env: OrtEnvironment): String? {
+        val assetBase = "qnn_block_0_0_edge_mesh_full_case"
+        if (!assetDirExists(assetBase)) return null
+
+        val opts = OrtSession.SessionOptions()
+        opts.setSessionLogLevel(OrtLoggingLevel.ORT_LOGGING_LEVEL_WARNING)
+        val profileFile = File(filesDir, "ort_profile_probe_block_0_0_edge_mesh_full_cpu.json")
+        opts.enableProfiling(profileFile.absolutePath)
+
+        val modelFile = copyAssetToFile("models_dynamic/blocks/block_0_0_edge_mesh_edge.onnx")
+        val input = readFloatBinary("$assetBase/input.raw")
+        val expected = readFloatBinary("$assetBase/expected_output.raw")
+        val shape = readLongShape("$assetBase/input_shape.json")
+
+        val createStartNs = System.nanoTime()
+        val session = env.createSession(modelFile.absolutePath, opts)
+        val sessionCreateMs = (System.nanoTime() - createStartNs) / 1_000_000.0
+        val inputName = session.inputNames.first()
+        val inputTensor = OnnxTensor.createTensor(env, toFloatBuffer(input), shape)
+        val feed = mapOf(inputName to inputTensor)
+
+        repeat(3) {
+            val warm = session.run(feed)
+            warm.close()
+        }
+
+        val runTimesMs = ArrayList<Double>(20)
+        var output = FloatArray(0)
+        repeat(20) {
+            val startNs = System.nanoTime()
+            val result = session.run(feed)
+            runTimesMs.add((System.nanoTime() - startNs) / 1_000_000.0)
+            output = flatten2dFloatArray(result[0].value as Array<*>)
+            result.close()
+        }
+        inputTensor.close()
+        val profilePath = session.endProfiling()
+        session.close()
+        val avgMs = runTimesMs.average()
+        val medianMs = runTimesMs.sorted()[runTimesMs.size / 2]
+
+        return "full_probe/block_0_0_edge_mesh_cpu: " +
+            "sessionCreate=${"%.2f".format(sessionCreateMs)}ms " +
+            "avg=${"%.2f".format(avgMs)}ms " +
+            "median=${"%.2f".format(medianMs)}ms runs=20 warmup=3 " +
             "compare={${compareFloatArrays(expected, output)}} " +
             summarizeProfile(profilePath)
     }
@@ -523,6 +514,12 @@ class MainActivity : Activity() {
             out[i] = buf.float
         }
         return out
+    }
+
+    private fun readLongShape(name: String): LongArray {
+        val text = assets.open(name).bufferedReader().use { it.readText() }
+        val arr = JSONArray(text)
+        return LongArray(arr.length()) { index -> arr.getLong(index) }
     }
 
     private fun zeroTensorBuffer(tensor: Tensor): ByteBuffer {

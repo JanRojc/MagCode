@@ -1,0 +1,15 @@
+{
+  "case_name": "qnn_node_encoder_mlp_body_case",
+  "model_name": "node_encoder_mlp_body",
+  "input_name": "input",
+  "output_name": "output",
+  "rows": 9631,
+  "input_dim": 24,
+  "output_dim": 128,
+  "source_model": "/Users/jan.rojc/Documents/MagCode/Android/HoodOnnxTest/app/src/main/assets/split_artifacts/node_encoder/mlp_body.onnx",
+  "source_input": "/Users/jan.rojc/Documents/MagCode/Android/HoodOnnxTest/app/src/main/assets/split_artifacts/node_encoder/node_encoder_input.raw",
+  "source_expected_output": "/Users/jan.rojc/Documents/MagCode/Android/HoodOnnxTest/app/src/main/assets/split_artifacts/node_encoder/mlp_body_expected.raw",
+  "device_input_path": "/data/local/tmp/qnn_node_encoder_mlp_body_case/input.raw",
+  "device_dir": "/data/local/tmp/qnn_node_encoder_mlp_body_case",
+  "backend": "htp-v68"
+}

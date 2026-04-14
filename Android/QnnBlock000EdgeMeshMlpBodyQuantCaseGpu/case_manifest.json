@@ -1,0 +1,24 @@
+{
+  "case_name": "qnn_block_0_0_edge_mesh_mlp_body_quant_case_gpu",
+  "model_name": "block_0_0_edge_mesh_mlp_body_quant",
+  "float_model_name": "block_0_0_edge_mesh_mlp_body.onnx",
+  "quant_model_name": "block_0_0_edge_mesh_mlp_body_quant.onnx",
+  "input_name": "input",
+  "output_name": "output",
+  "rows": 45768,
+  "input_dim": 384,
+  "output_dim": 128,
+  "source_model": "/Users/jan.rojc/Documents/MagCode/Android/QnnBlock000EdgeMeshMlpBodyCase/block_0_0_edge_mesh_mlp_body.onnx",
+  "source_input": "/Users/jan.rojc/Documents/MagCode/Android/QnnBlock000EdgeMeshMlpBodyCase/input.raw",
+  "source_expected_output": "/Users/jan.rojc/Documents/MagCode/Android/QnnBlock000EdgeMeshMlpBodyCase/expected_output.raw",
+  "device_input_path": "/data/local/tmp/qnn_block_0_0_edge_mesh_mlp_body_quant_case_gpu/input.raw",
+  "device_dir": "/data/local/tmp/qnn_block_0_0_edge_mesh_mlp_body_quant_case_gpu",
+  "backend": "gpu",
+  "quantization": {
+    "method": "static_qdq",
+    "activation_type": "QUInt8",
+    "weight_type": "QInt8",
+    "per_channel": false,
+    "calibration": "single_real_input"
+  }
+}

@@ -90,6 +90,7 @@ struct CachedQnnCaseState {
 CachedQnnCaseState g_cachedNodeEncoderCase;
 CachedQnnCaseState g_cachedBlock000EdgeMeshCase;
 CachedQnnCaseState g_cachedBlock001EdgeMeshCase;
+CachedQnnCaseState g_cachedBlock002EdgeMeshCase;
 std::vector<float> g_cachedMeshEdgeState;
 int g_cachedMeshEdgeStateLatent = 0;
 int g_cachedMeshEdgeStateEdgeCount = 0;
@@ -1245,6 +1246,21 @@ Java_com_magcode_hoodonnxtest_NativeQairtBridge_initCachedQnnBlock001EdgeMeshMlp
 }
 
 extern "C" JNIEXPORT jstring JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_initCachedQnnBlock002EdgeMeshMlpBodyCase(
+    JNIEnv* env,
+    jclass,
+    jstring bundleDirJ) {
+  const char* bundleDirChars = env->GetStringUTFChars(bundleDirJ, nullptr);
+  if (bundleDirChars == nullptr) {
+    return env->NewStringUTF("failed_to_read_bundle_dir");
+  }
+  const std::string bundleDir(bundleDirChars);
+  env->ReleaseStringUTFChars(bundleDirJ, bundleDirChars);
+  const auto result = InitializeCachedCase(bundleDir, g_cachedBlock002EdgeMeshCase);
+  return env->NewStringUTF(result.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_magcode_hoodonnxtest_NativeQairtBridge_runCachedQnnNodeEncoderCase(
     JNIEnv* env,
     jclass,
@@ -1756,6 +1772,44 @@ Java_com_magcode_hoodonnxtest_NativeQairtBridge_runCachedQnnBlock001EdgeMeshMlpB
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_runCachedQnnBlock002EdgeMeshMlpBodyCaseStateAgg(
+    JNIEnv* env,
+    jclass,
+    jfloatArray clothNodesJ,
+    jintArray edgeIndexJ,
+    jint latent) {
+  if (!g_cachedBlock002EdgeMeshCase.initialized) {
+    jclass exClass = env->FindClass("java/lang/IllegalStateException");
+    env->ThrowNew(exClass, "cached qnn block_0_2 edge mesh case is not initialized");
+    return nullptr;
+  }
+  const jsize clothSize = env->GetArrayLength(clothNodesJ);
+  const jsize edgeIndexSize = env->GetArrayLength(edgeIndexJ);
+  if (clothNodesJ == nullptr || edgeIndexJ == nullptr || latent <= 0 || (clothSize % latent) != 0 ||
+      (edgeIndexSize % 2) != 0) {
+    jclass exClass = env->FindClass("java/lang/IllegalArgumentException");
+    env->ThrowNew(exClass, "invalid block_0_2 mesh state args");
+    return nullptr;
+  }
+  std::vector<float> clothNodes(static_cast<size_t>(clothSize));
+  std::vector<jint> edgeIndex(static_cast<size_t>(edgeIndexSize));
+  env->GetFloatArrayRegion(clothNodesJ, 0, clothSize, clothNodes.data());
+  env->GetIntArrayRegion(edgeIndexJ, 0, edgeIndexSize, edgeIndex.data());
+  if (env->ExceptionCheck()) return nullptr;
+
+  std::vector<float> aggregated;
+  if (!ExecuteMeshEdgeCaseToAggregated(g_cachedBlock002EdgeMeshCase, clothNodes, edgeIndex, latent, aggregated)) {
+    jclass exClass = env->FindClass("java/lang/RuntimeException");
+    env->ThrowNew(exClass, "block_0_2 mesh QNN execution failed");
+    return nullptr;
+  }
+  jfloatArray outputJ = env->NewFloatArray(static_cast<jsize>(aggregated.size()));
+  if (outputJ == nullptr) return nullptr;
+  env->SetFloatArrayRegion(outputJ, 0, static_cast<jsize>(aggregated.size()), aggregated.data());
+  return outputJ;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
 Java_com_magcode_hoodonnxtest_NativeQairtBridge_exportCachedQnnMeshEdgeState(
     JNIEnv* env,
     jclass) {
@@ -1794,6 +1848,17 @@ Java_com_magcode_hoodonnxtest_NativeQairtBridge_releaseCachedQnnBlock001EdgeMesh
     jclass) {
   const bool wasInitialized = g_cachedBlock001EdgeMeshCase.initialized;
   ReleaseCachedCase(g_cachedBlock001EdgeMeshCase);
+  ResetCachedMeshEdgeState();
+  const std::string result = wasInitialized ? "released" : "already_released";
+  return env->NewStringUTF(result.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_magcode_hoodonnxtest_NativeQairtBridge_releaseCachedQnnBlock002EdgeMeshMlpBodyCase(
+    JNIEnv* env,
+    jclass) {
+  const bool wasInitialized = g_cachedBlock002EdgeMeshCase.initialized;
+  ReleaseCachedCase(g_cachedBlock002EdgeMeshCase);
   ResetCachedMeshEdgeState();
   const std::string result = wasInitialized ? "released" : "already_released";
   return env->NewStringUTF(result.c_str());

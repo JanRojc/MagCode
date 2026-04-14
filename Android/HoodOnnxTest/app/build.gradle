@@ -7,7 +7,11 @@ def qnnNodeEncoderCaseDir = file("${rootDir}/../QnnNodeEncoderMlpBodyCaseHtpV68"
 def qnnBlock000NodeCaseDir = file("${rootDir}/../QnnBlock000NodeCase")
 def qnnBlock000EdgeMeshCaseDir = file("${rootDir}/../QnnBlock000EdgeMeshCase")
 def qnnBlock000EdgeMeshMlpBodyCaseDir = file("${rootDir}/../QnnBlock000EdgeMeshMlpBodyCase")
+def qnnBlock000EdgeMeshMlpBodyQuantCaseDir = file("${rootDir}/../QnnBlock000EdgeMeshMlpBodyQuantCaseHtpV68")
+def qnnBlock000EdgeMeshMlpBodyQuantGpuCaseDir = file("${rootDir}/../QnnBlock000EdgeMeshMlpBodyQuantCaseGpu")
+def qnnBlock000EdgeMeshFullCaseDir = file("${rootDir}/../QnnBlock000EdgeMeshFullCase")
 def qnnBlock001EdgeMeshMlpBodyCaseDir = file("${rootDir}/../QnnBlock001EdgeMeshMlpBodyCase")
+def qnnBlock002EdgeMeshMlpBodyCaseDir = file("${rootDir}/../QnnBlock002EdgeMeshMlpBodyCase")
 def splitNodeEncoderDir = file("${projectDir}/src/main/assets/split_artifacts/node_encoder")
 def generatedQnnAssetRoot = file("$buildDir/generated/qnnNodeEncoderAssets")
 
@@ -93,9 +97,32 @@ tasks.register('syncQnnBlock000EdgeMeshMlpBodyCaseAssets', Copy) {
     into(new File(generatedQnnAssetRoot, 'qnn_block_0_0_edge_mesh_mlp_body_case'))
 }
 
+tasks.register('syncQnnBlock000EdgeMeshMlpBodyQuantCaseAssets', Copy) {
+    from(qnnBlock000EdgeMeshMlpBodyQuantCaseDir)
+    into(new File(generatedQnnAssetRoot, 'qnn_block_0_0_edge_mesh_mlp_body_quant_case_htp_v68'))
+}
+
+tasks.register('syncQnnBlock000EdgeMeshMlpBodyQuantGpuCaseAssets', Copy) {
+    doFirst {
+        delete(new File(generatedQnnAssetRoot, 'qnn_block_0_0_edge_mesh_mlp_body_quant_case_gpu'))
+    }
+    from(qnnBlock000EdgeMeshMlpBodyQuantGpuCaseDir)
+    into(new File(generatedQnnAssetRoot, 'qnn_block_0_0_edge_mesh_mlp_body_quant_case_gpu'))
+}
+
+tasks.register('syncQnnBlock000EdgeMeshFullCaseAssets', Copy) {
+    from(qnnBlock000EdgeMeshFullCaseDir)
+    into(new File(generatedQnnAssetRoot, 'qnn_block_0_0_edge_mesh_full_case'))
+}
+
 tasks.register('syncQnnBlock001EdgeMeshMlpBodyCaseAssets', Copy) {
     from(qnnBlock001EdgeMeshMlpBodyCaseDir)
     into(new File(generatedQnnAssetRoot, 'qnn_block_0_1_edge_mesh_mlp_body_case'))
+}
+
+tasks.register('syncQnnBlock002EdgeMeshMlpBodyCaseAssets', Copy) {
+    from(qnnBlock002EdgeMeshMlpBodyCaseDir)
+    into(new File(generatedQnnAssetRoot, 'qnn_block_0_2_edge_mesh_mlp_body_case'))
 }
 
 preBuild.dependsOn(
@@ -103,7 +130,11 @@ preBuild.dependsOn(
     tasks.named('syncQnnBlock000NodeCaseAssets'),
     tasks.named('syncQnnBlock000EdgeMeshCaseAssets'),
     tasks.named('syncQnnBlock000EdgeMeshMlpBodyCaseAssets'),
-    tasks.named('syncQnnBlock001EdgeMeshMlpBodyCaseAssets')
+    tasks.named('syncQnnBlock000EdgeMeshMlpBodyQuantCaseAssets'),
+    tasks.named('syncQnnBlock000EdgeMeshMlpBodyQuantGpuCaseAssets'),
+    tasks.named('syncQnnBlock000EdgeMeshFullCaseAssets'),
+    tasks.named('syncQnnBlock001EdgeMeshMlpBodyCaseAssets'),
+    tasks.named('syncQnnBlock002EdgeMeshMlpBodyCaseAssets')
 )
 
 dependencies {

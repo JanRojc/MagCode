@@ -32,6 +32,7 @@ object NativeQairtBridge {
 
     external fun initCachedQnnBlock000EdgeMeshMlpBodyCase(bundleDir: String): String
     external fun initCachedQnnBlock001EdgeMeshMlpBodyCase(bundleDir: String): String
+    external fun initCachedQnnBlock002EdgeMeshMlpBodyCase(bundleDir: String): String
 
     external fun runCachedQnnBlock000EdgeMeshMlpBodyCaseInput(input: FloatArray): FloatArray
 
@@ -65,8 +66,15 @@ object NativeQairtBridge {
         latent: Int
     ): FloatArray
 
+    external fun runCachedQnnBlock002EdgeMeshMlpBodyCaseStateAgg(
+        clothNodes: FloatArray,
+        edgeIndex: IntArray,
+        latent: Int
+    ): FloatArray
+
     external fun exportCachedQnnMeshEdgeState(): FloatArray
 
     external fun releaseCachedQnnBlock000EdgeMeshMlpBodyCase(): String
     external fun releaseCachedQnnBlock001EdgeMeshMlpBodyCase(): String
+    external fun releaseCachedQnnBlock002EdgeMeshMlpBodyCase(): String
 }
