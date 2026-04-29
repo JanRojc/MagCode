@@ -25,15 +25,13 @@ import java.nio.channels.FileChannel
 
 class MainActivity : Activity() {
     private companion object {
-        private const val RUN_STARTUP_PROBES = true
-        private const val RUN_TARGETED_QNN_PROBES = false
-        private const val RUN_ONLY_MLP_BODY_COMPARISON = false
+        private const val LOG_TAG = "HoodOnnxTest"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val statusView = TextView(this)
-        statusView.text = "Running ONNX Runtime pipeline..."
+        statusView.text = "Running ORT CPU baseline..."
         statusView.movementMethod = ScrollingMovementMethod()
         statusView.setTextIsSelectable(true)
         setContentView(statusView)
@@ -57,67 +55,18 @@ class MainActivity : Activity() {
         val aggOk = CpuScatterSum.selfTest()
         val aggLine = "cpu_scatter_sum_selftest=$aggOk"
         reportLines.add(aggLine)
-        Log.i("HoodOnnxTest", aggLine)
+        Log.i(LOG_TAG, aggLine)
         if (!aggOk) {
             return "FAILED: cpu_scatter_sum_selftest=false"
         }
 
         val nnapiDevicesLine = "nnapi/devices: ${NativeQairtBridge.describeNnapiDevices()}"
         reportLines.add(nnapiDevicesLine)
-        Log.i("HoodOnnxTest", nnapiDevicesLine)
+        Log.i(LOG_TAG, nnapiDevicesLine)
 
-        if (RUN_STARTUP_PROBES) {
-            runBlockBodyProbe(env, "cpu")?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runBlockBodyProbe(env, "nnapi")?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runBlockBodyProbe(env, "xnnpack")?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            val reportText = reportLines.joinToString(separator = "\n")
-            copyToClipboard(reportText)
-            return reportText
-        }
-
-        if (RUN_TARGETED_QNN_PROBES) {
-            runQnnCaseProbe("block_0_0_edge_mesh_case", "qnn_block_0_0_edge_mesh_case")?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runMlpBodyCpuProbe(env)?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runQnnCaseProbe("block_0_0_edge_mesh_mlp_body_case", "qnn_block_0_0_edge_mesh_mlp_body_case")?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runQnnCaseProbe(
-                "block_0_0_edge_mesh_mlp_body_quant_case_gpu",
-                "qnn_block_0_0_edge_mesh_mlp_body_quant_case_gpu"
-            )?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            if (RUN_ONLY_MLP_BODY_COMPARISON) {
-                val reportText = reportLines.joinToString(separator = "\n")
-                copyToClipboard(reportText)
-                return reportText
-            }
-            runFullBlockCpuProbe(env)?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-            runQnnCaseProbe("block_0_0_edge_mesh_full_case", "qnn_block_0_0_edge_mesh_full_case")?.let {
-                reportLines.add(it)
-                Log.i("HoodOnnxTest", it)
-            }
-        }
+        val modeLine = "benchmark/mode=ORT_CPU_BASELINE"
+        reportLines.add(modeLine)
+        Log.i(LOG_TAG, modeLine)
 
         val pipelineProfileDir = getExternalFilesDir(null) ?: filesDir
         val pipelineLine = HoodPipelineRunner.run(
@@ -125,7 +74,8 @@ class MainActivity : Activity() {
             filesDir,
             applicationInfo.nativeLibraryDir,
             env,
-            pipelineProfileDir
+            pipelineProfileDir,
+            logIntermediate = false
         )
         reportLines.add(pipelineLine)
 

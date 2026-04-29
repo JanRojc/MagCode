@@ -145,14 +145,18 @@ object HoodPipelineRunner {
         filesDir: File,
         nativeLibraryDir: String,
         env: OrtEnvironment,
-        profileDir: File
+        profileDir: File,
+        logIntermediate: Boolean = true
     ): String {
         return when {
             ENABLE_SINGLE_SEQUENCE_FRAME && assetExists(assets, "pipeline_real_sequence/config.json") ->
-                runSingleSequenceFrame(assets, filesDir, nativeLibraryDir, env, profileDir)
-            assetExists(assets, "pipeline_real_sequence/config.json") -> runSequence(assets, filesDir, nativeLibraryDir, env, profileDir)
-            assetExists(assets, "pipeline_real/config.json") -> runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, "pipeline_real", logIntermediate = true)
-            else -> runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, "pipeline", logIntermediate = true)
+                runSingleSequenceFrame(assets, filesDir, nativeLibraryDir, env, profileDir, logIntermediate)
+            assetExists(assets, "pipeline_real_sequence/config.json") ->
+                runSequence(assets, filesDir, nativeLibraryDir, env, profileDir, logIntermediateFirstFrame = logIntermediate)
+            assetExists(assets, "pipeline_real/config.json") ->
+                runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, "pipeline_real", logIntermediate = logIntermediate)
+            else ->
+                runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, "pipeline", logIntermediate = logIntermediate)
         }
     }
 
@@ -161,13 +165,14 @@ object HoodPipelineRunner {
         filesDir: File,
         nativeLibraryDir: String,
         env: OrtEnvironment,
-        profileDir: File
+        profileDir: File,
+        logIntermediate: Boolean
     ): String {
         val config = readJsonObject(assets, "pipeline_real_sequence/config.json")
         val firstFrame = config.getJSONArray("frames").getJSONObject(0)
         val frameIdx = firstFrame.getInt("frame_idx")
         val assetBase = firstFrame.getString("asset_base")
-        val line = runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, assetBase, logIntermediate = true)
+        val line = runSingle(assets, filesDir, nativeLibraryDir, env, profileDir, assetBase, logIntermediate = logIntermediate)
         return "sequence frame=$frameIdx $line"
     }
 
@@ -176,7 +181,8 @@ object HoodPipelineRunner {
         filesDir: File,
         nativeLibraryDir: String,
         env: OrtEnvironment,
-        profileDir: File
+        profileDir: File,
+        logIntermediateFirstFrame: Boolean
     ): String {
         val config = readJsonObject(assets, "pipeline_real_sequence/config.json")
         val frames = config.getJSONArray("frames")
@@ -189,7 +195,16 @@ object HoodPipelineRunner {
                 val frame = frames.getJSONObject(i)
                 val frameIdx = frame.getInt("frame_idx")
                 val assetBase = frame.getString("asset_base")
-                val result = runFrame(assets, filesDir, env, profileDir, assetBase, modelBase, sessions, logIntermediate = i == 0)
+                val result = runFrame(
+                    assets,
+                    filesDir,
+                    env,
+                    profileDir,
+                    assetBase,
+                    modelBase,
+                    sessions,
+                    logIntermediate = logIntermediateFirstFrame && i == 0
+                )
                 if (result.maxDiff > maxDiffAll) maxDiffAll = result.maxDiff
                 val line = "sequence frame=$frameIdx ${result.line}"
                 lines.add(line)
