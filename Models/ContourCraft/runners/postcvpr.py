@@ -137,6 +137,7 @@ class Runner(nn.Module):
     def _rollout(self, sequence, n_steps, progressbar=False, bare=False):
         trajectory = []
         obstacle_trajectory = []
+        times = []
 
         metrics_dict = defaultdict(list)
 
@@ -156,7 +157,11 @@ class Runner(nn.Module):
             # print('STATE')
             # print(state); assert False
 
+            start_t = time.time()
             state = self.model(state)
+            end_t = time.time()
+            times.append(end_t-start_t)
+            print("time inside:", end_t - start_t)
 
             trajectory.append(state['cloth'].pred_pos.detach().cpu().numpy())
             obstacle_trajectory.append(state['obstacle'].target_pos.detach().cpu().numpy())
@@ -167,6 +172,10 @@ class Runner(nn.Module):
                     if 'loss' in k:
                         metrics_dict[k].append(v.item())
             prev_out_dict = state.clone()
+
+        print("avg time:", sum(times)/len(times))
+        with open("/mnt/d/ClothSim/Results/hood/times_new.txt", "a", encoding="utf-8") as f:
+            f.write(f"{sum(times)/len(times)} sec/it\n")
 
         
         return trajectory, obstacle_trajectory, metrics_dict

@@ -74,4 +74,4 @@ model:
     k_world_edges: 1
     n_coarse_levels: 3
 
-device: 'cpu'
+device: 'cuda:0'

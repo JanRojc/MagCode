@@ -1,3 +1,7 @@
+import sys
+sys.path.insert(0, "/home/janr/documents/MagCode/tailornet_venv/lib/python3.10/site-packages")
+
+
 import os
 import numpy as np
 import torch
@@ -106,7 +110,7 @@ def process_example(seq_num, seq_idx, gender, garment_class, cloth_type="cotton"
     # run inference
     seq_len = min(len(thetas), len(betas), len(gammas), 300)
     start_t = time.time()
-    
+    times = []
     for i in range(seq_len):
         theta = thetas[i]
         beta = betas[i]
@@ -118,12 +122,15 @@ def process_example(seq_num, seq_idx, gender, garment_class, cloth_type="cotton"
         # 2. Normalize for the TailorNet forward pass
         theta_normalized = normalize_y_rotation(theta_fixed)
 
+        start_t2 = time.time()
         with torch.no_grad():
             pred_verts_d = tn_runner.forward(
                 thetas=torch.from_numpy(theta_normalized[None, :].astype(np.float32)).cuda(),
                 betas=torch.from_numpy(beta[None, :].astype(np.float32)).cuda(),
                 gammas=torch.from_numpy(gamma[None, :].astype(np.float32)).cuda(),
             )[0].cpu().numpy()
+        end_t2 = time.time()
+        times.append(end_t2-start_t2)
 
         # 3. Generate Body and Garment
         # This will now use the A-posed theta_fixed
@@ -133,17 +140,17 @@ def process_example(seq_num, seq_idx, gender, garment_class, cloth_type="cotton"
         pred_gar = remove_interpenetration_fast(pred_gar, body)
 
         # Save Results
-        body.write_ply(os.path.join(out_dir, "body_{:04d}.ply".format(i)))
-        pred_gar.write_ply(os.path.join(out_dir, "pred_gar_{:04d}.ply".format(i)))
+        # body.write_ply(os.path.join(out_dir, "body_{:04d}.ply".format(i)))
+        # pred_gar.write_ply(os.path.join(out_dir, "pred_gar_{:04d}.ply".format(i)))
         
-        if i % 10 == 0:
-            print(f"  Frame {i}/{seq_len}")
+        print(f"  Frame {i}/{seq_len}, time: {end_t2-start_t2}")
         if i == 300:
             break
 
     end_t = time.time()
-    with open(BASE_OUT_PATH + "times.txt", "a", encoding="utf-8") as f:
-        f.write(f"{garment} {gender} {seq_num} {seq_idx} {(end_t-start_t)/seq_len} sec/it\n")
+    with open(BASE_OUT_PATH + "times_new.txt", "a", encoding="utf-8") as f:
+        f.write(f"{garment} {gender} {seq_num} {seq_idx} {sum(times)/len(times)} sec/it\n")
+    print(f"{garment} {gender} {seq_num} {seq_idx} {sum(times)/len(times)} sec/it")
     print(f"[DONE] Saved to {out_dir}")
 
 if __name__ == '__main__':

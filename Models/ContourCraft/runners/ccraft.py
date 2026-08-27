@@ -174,6 +174,7 @@ class Runner(nn.Module):
     def _rollout(self, sample, start_idx, n_steps, progressbar=False, bare=False, safecheck=True):
         trajectories = defaultdict(list)
         is_obstacle = 'obstacle' in sample.node_types
+        times = []
 
         metrics_dict = defaultdict(list)
 
@@ -212,6 +213,7 @@ class Runner(nn.Module):
             if n_steps == 0:
                 break
 
+            start_t = time.time()
             with TorchTimer(metrics_dict, 'hood_time', start=start, end=end):
                 sample_step = self.model(sample_step)
             ncoll = self.safecheck_solver.calc_tritri_collisions2(sample_step, verts_key='pred_pos')
@@ -227,6 +229,12 @@ class Runner(nn.Module):
                 loss_dict_hood, loss_weight_dict_hood, _, _ = self.criterion_pass(sample_step, self.criterion_dict)
                 metrics_dict = self.add_metrics(loss_dict_hood, loss_weight_dict_hood, None, None,
                                                 metrics_dict)
+            end_t = time.time()
+            times.append(end_t-start_t)
+            print("time inside:", end_t - start_t)
+        print("avg time:", sum(times)/len(times))
+        with open("/mnt/d/ClothSim/Results/ccraft/times_new.txt", "a", encoding="utf-8") as f:
+            f.write(f"{sum(times)/len(times)} sec/it\n")
 
         metrics_dict['fail_reason'] = fail_reason
 
